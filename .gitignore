@@ -1,0 +1,42 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Node / frontend
+node_modules/
+.next/
+out/
+.pnpm-store/
+*.tsbuildinfo
+frontend/next-env.d.ts
+
+# Python / backend & worker
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+
+# Docker
+docker/volumes/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Misc
+*.pid
+coverage/
