@@ -40,3 +40,6 @@ pnpm-debug.log*
 # Misc
 *.pid
 coverage/
+
+# claude
+CLAUDE.md

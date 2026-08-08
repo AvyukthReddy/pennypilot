@@ -26,10 +26,11 @@ endpoint" not "Added health check endpoint"). Keep commits focused.
 
 ```bash
 # frontend
-cd frontend && pnpm lint && pnpm exec tsc --noEmit
+cd frontend && npm run lint && npx tsc --noEmit
 
-# backend
-cd backend && poetry run ruff check . && poetry run pytest -q
+# backend (activate the venv first: .venv\Scripts\activate on Windows,
+# source .venv/bin/activate on macOS/Linux)
+cd backend && ruff check . && pytest -q
 
 # worker
 cd worker && poetry run ruff check .
