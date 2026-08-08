@@ -35,5 +35,5 @@ cd backend && poetry run ruff check . && poetry run pytest -q
 cd worker && poetry run ruff check .
 
 # full stack
-docker compose -f docker/docker-compose.yml up --build
+docker compose --env-file .env -f docker/docker-compose.yml up --build
 ```

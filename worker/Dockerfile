@@ -12,4 +12,7 @@ RUN poetry install --no-interaction --no-ansi --without dev --no-root
 
 COPY . .
 
+RUN useradd --create-home --uid 1000 appuser
+USER appuser
+
 CMD ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info"]

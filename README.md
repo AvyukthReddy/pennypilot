@@ -38,8 +38,13 @@ Requires Docker Desktop.
 
 ```bash
 cp .env.example .env
-docker compose -f docker/docker-compose.yml up --build
+docker compose --env-file .env -f docker/docker-compose.yml up --build
 ```
+
+> `--env-file .env` is required because `.env` lives at the repo root, not
+> next to `docker-compose.yml` — Docker Compose only auto-loads a `.env` from
+> the compose file's own directory for `${VAR}` substitution in the compose
+> file itself (separate from the `env_file:` entries used inside containers).
 
 - Frontend: http://localhost:3000
 - Backend health check: http://localhost:8000/health
