@@ -5,9 +5,9 @@ bank accounts, ingesting statements/receipts via OCR, and using AI for
 transaction categorization, budgeting insights, forecasting, anomaly
 detection, and a RAG-powered chat assistant over your own financial data.
 
-This repo is in **Phase 0 (Foundation)**: repo structure, local dev
-environment, and CI/CD are in place. Feature work (auth, Plaid, OCR, AI
-categorization, etc.) lands in subsequent phases.
+This repo is in **Phase 0 (Foundation)**: repo structure and local dev
+environment are in place; CI/CD is not yet set up. Feature work (auth, Plaid,
+OCR, AI categorization, etc.) lands in subsequent phases.
 
 ## Tech stack
 
@@ -17,7 +17,7 @@ categorization, etc.) lands in subsequent phases.
 | Backend   | FastAPI (Python) |
 | Worker    | Celery + Redis |
 | Database  | PostgreSQL, Redis |
-| Infra     | Docker Compose (local), GitHub Actions (CI) |
+| Infra     | Docker Compose (local) |
 
 ## Repository structure
 
@@ -54,15 +54,17 @@ docker compose --env-file .env -f docker/docker-compose.yml up --build
 **Frontend**
 ```bash
 cd frontend
-pnpm install
-pnpm dev
+npm install
+npm run dev
 ```
 
 **Backend**
 ```bash
 cd backend
-poetry install
-poetry run uvicorn app.main:app --reload
+python -m venv .venv
+.venv\Scripts\activate    # macOS/Linux: source .venv/bin/activate
+pip install -r requirements-dev.txt
+python server.py
 ```
 
 **Worker**
