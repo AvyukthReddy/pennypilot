@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     supabase_url: str = ""
     supabase_jwt_audience: str = "authenticated"
+    frontend_origin: str = "http://localhost:3000"
 
 
 settings = Settings()
