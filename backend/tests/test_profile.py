@@ -93,6 +93,28 @@ def test_update_profile_creates_then_partially_updates(make_token) -> None:
     assert body["username"] == "avy"
 
 
+def test_upload_profile_image_requires_auth() -> None:
+    response = client.post("/api/profile/image", files={"file": ("avatar.png", b"data", "image/png")})
+    assert response.status_code == 401
+
+
+def test_upload_profile_image_updates_profile(make_token, monkeypatch) -> None:
+    _use_fake_db(FakeSession())
+    monkeypatch.setattr(
+        "app.api.profile.upload_avatar", lambda **kwargs: "https://example.com/avatar.png"
+    )
+    token = make_token()
+
+    response = client.post(
+        "/api/profile/image",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("avatar.png", b"data", "image/png")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["profile_image"] == "https://example.com/avatar.png"
+
+
 def test_update_profile_rejects_duplicate_username(make_token) -> None:
     session = FakeSession()
     other_user_id = uuid.uuid4()

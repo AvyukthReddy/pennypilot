@@ -16,6 +16,7 @@ class CurrentUser:
     id: str
     email: str | None
     claims: dict
+    token: str
 
 
 @lru_cache
@@ -43,4 +44,4 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
         ) from exc
 
-    return CurrentUser(id=claims["sub"], email=claims.get("email"), claims=claims)
+    return CurrentUser(id=claims["sub"], email=claims.get("email"), claims=claims, token=token)

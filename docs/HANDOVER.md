@@ -21,6 +21,18 @@ request-flow maps).
   underlying table/model was renamed. Frontend account settings page
   (`frontend/src/app/settings/`) reads/writes it through the shared API service layer
   (`frontend/src/services/app.service.ts`, `hooks/use-api-request.ts`).
+- **Avatar upload**: `POST /api/profile/image` (`backend/app/api/profile.py`) accepts a
+  multipart file, validates type/size in `backend/app/services/storage.py`, and uploads
+  to the Supabase Storage `avatars` bucket using the caller's own JWT (forwarded via
+  `CurrentUser.token`) — Storage RLS enforces users can only write to their own
+  `{user_id}/` folder, same trust model as Postgres RLS. Bucket + RLS policy
+  (`avatars_owner_write`) were created directly via SQL against `storage.buckets` /
+  `storage.objects` (not tracked by Alembic — that's Supabase-managed schema, see
+  [DECISIONS.md](DECISIONS.md)). Frontend UI is the avatar circle + "Change photo" in
+  `frontend/src/components/profile-form.tsx`; files over 5MB are compressed client-side
+  first (`frontend/src/lib/compress-image.ts`, canvas resize + JPEG re-encode) rather
+  than rejected — the backend's 5MB check stays as a safety net for anyone hitting the
+  API directly.
 - **Worker**: `worker/` scaffolded (Celery) but no tasks implemented yet beyond the
   placeholder in `worker/worker/tasks.py`.
 - **Shared**: `shared/` is empty — intended for cross-service Pydantic models/enums once
@@ -28,13 +40,17 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: renamed `profiles` table to
-  `users` and added `created_at`/`updated_at`/`profile_image` columns (migration
-  `f63aac5142d7`, applied to Supabase).
+- Nothing currently in flight. Last completed unit of work: profile image upload
+  (`POST /api/profile/image` + settings page UI), backed by a new Supabase Storage
+  `avatars` bucket. Not yet verified in a live browser session — Chrome extension
+  wasn't connected when this was built; verified via `tsc`/lint/pytest only.
 
 ## Known broken / rough edges
 
-- None tracked yet — file bug traces under `docs/bugs-features/` as they come up.
+- Profile image upload (`POST /api/profile/image`) hasn't been exercised against a real
+  logged-in browser session yet — only unit-tested (auth mocked, `upload_avatar`
+  monkeypatched). Worth a manual pass through the settings page before considering it
+  done.
 
 ## What to avoid
 

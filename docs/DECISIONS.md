@@ -4,6 +4,36 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-15 — Profile image upload: backend-proxied to Supabase Storage, bucket/RLS created via direct SQL
+
+`POST /api/profile/image` takes a multipart upload, validates it in
+`backend/app/services/storage.py` (JPEG/PNG/WebP only, 5MB max), and forwards it to
+Supabase Storage's REST API using the *caller's own JWT* (added `token` to
+`CurrentUser` in `backend/app/core/security.py` to make this possible) — not a
+service-role key. The `avatars` bucket and its RLS policy
+(`avatars_owner_write`, scoped to `(storage.foldername(name))[1] = auth.uid()::text`)
+were created by running raw SQL against `storage.buckets`/`storage.objects` over the
+same Postgres connection Alembic uses, not through the Supabase dashboard.
+
+**Why**: (1) Proxying through FastAPI instead of uploading straight from the browser to
+Supabase Storage keeps "all business logic through FastAPI" intact (see the Server
+Actions/FastAPI split decision below) and lets us enforce file type/size server-side
+before it ever reaches Storage. (2) Using the user's own JWT rather than a service-role
+key means the backend never needs a new admin secret — Storage RLS does the same
+per-user authorization Postgres RLS would. (3) `storage.buckets`/`storage.objects` are
+just Postgres tables, and this project already has a working superuser-ish connection
+to them (the Alembic session-pooler URL) — creating the bucket that way was faster than
+setting up dashboard/Management-API access, and is reversible (`delete from
+storage.buckets where id = 'avatars'` + `drop policy`). This is a one-time
+infra-provisioning step, not part of the Alembic-tracked `public` schema history —
+Supabase owns the `storage` schema, so it's deliberately not folded into a migration.
+
+**How to apply**: any future bucket needs the same two things — a `storage.buckets` row
+and an owner-scoped RLS policy on `storage.objects` — done directly via SQL against the
+project's Postgres connection, then referenced from a backend service module the same
+way `storage.py` does. Don't introduce a Supabase service-role key for this unless a
+feature genuinely needs cross-user access Storage RLS can't express.
+
 ## 2026-08-15 — Renamed `profiles` table to `users`; kept `/api/profile` route and schema names as-is
 
 Migration `f63aac5142d7` renames `public.profiles` to `public.users` and adds

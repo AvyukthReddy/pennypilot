@@ -1,15 +1,19 @@
 "use client";
 
-import { useEffect, useState, type SubmitEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type SubmitEvent } from "react";
 
 import { APP_METHOD } from "@/constants/app.constants";
 import { settingsEndpoints } from "@/constants/endpoints/settings.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
+import { compressImage } from "@/lib/compress-image";
 import { COUNTRIES } from "@/lib/countries";
 
 const CURRENCIES = Array.from(new Set(COUNTRIES.map((c) => c.currency))).sort((a, b) =>
   a.localeCompare(b),
 );
+
+const ACCEPTED_IMAGE_TYPES = "image/jpeg,image/png,image/webp";
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 type Profile = {
   username: string | null;
@@ -17,6 +21,7 @@ type Profile = {
   last_name: string | null;
   country: string | null;
   currency: string | null;
+  profile_image: string | null;
 };
 
 const EMPTY_PROFILE: Profile = {
@@ -25,13 +30,23 @@ const EMPTY_PROFILE: Profile = {
   last_name: null,
   country: null,
   currency: null,
+  profile_image: null,
 };
+
+function initials(profile: Profile): string {
+  const first = profile.first_name?.[0] ?? profile.username?.[0] ?? "";
+  const last = profile.last_name?.[0] ?? "";
+  return (first + last).toUpperCase() || "?";
+}
 
 export function ProfileForm() {
   const [profile, setProfile] = useState<Profile>(EMPTY_PROFILE);
   const [saved, setSaved] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
   const profileRequest = useApiRequest<Profile>();
   const saveRequest = useApiRequest<Profile>();
+  const imageRequest = useApiRequest<Profile>();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     profileRequest.run(settingsEndpoints.profile(), APP_METHOD.GET).then((data) => {
@@ -55,6 +70,27 @@ export function ProfileForm() {
       setProfile(data);
       setSaved(true);
     }
+  }
+
+  async function handleImageChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setImageError(null);
+
+    const upload = file.size > MAX_IMAGE_BYTES ? await compressImage(file, MAX_IMAGE_BYTES) : file;
+
+    if (upload.size > MAX_IMAGE_BYTES) {
+      setImageError("Image is too large even after compression — try a smaller photo");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", upload);
+
+    const data = await imageRequest.run(settingsEndpoints.profileImage(), APP_METHOD.POST, formData);
+    if (data) setProfile(data);
   }
 
   function handleCountryChange(code: string) {
@@ -83,6 +119,59 @@ export function ProfileForm() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <div className="flex items-center gap-4">
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={imageRequest.loading}
+          aria-label="Change profile photo"
+          className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-zinc-300 bg-zinc-100 text-lg font-semibold text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+        >
+          {profile.profile_image ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={profile.profile_image}
+              alt="Profile"
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            initials(profile)
+          )}
+          {imageRequest.loading && (
+            <span className="absolute inset-0 flex items-center justify-center bg-black/40 text-xs text-white">
+              …
+            </span>
+          )}
+        </button>
+
+        <div className="flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={imageRequest.loading}
+            className="self-start text-sm font-medium text-black underline disabled:opacity-50 dark:text-zinc-50"
+          >
+            {imageRequest.loading ? "Uploading…" : "Change photo"}
+          </button>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            JPEG, PNG, or WebP — large images are compressed automatically.
+          </p>
+          {(imageError || imageRequest.error) && (
+            <p className="text-xs text-red-600 dark:text-red-400" aria-live="polite">
+              {imageError || imageRequest.error}
+            </p>
+          )}
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ACCEPTED_IMAGE_TYPES}
+          onChange={handleImageChange}
+          className="hidden"
+        />
+      </div>
+
       <div className="flex flex-col gap-1">
         <label htmlFor="username" className="text-sm text-zinc-600 dark:text-zinc-400">
           Username

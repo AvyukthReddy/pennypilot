@@ -30,6 +30,24 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `backend/app/core/db.py`.
 5. CORS is configured in `backend/app/main.py` to allow the frontend origin.
 
+## Profile image upload (settings page)
+
+1. `components/profile-form.tsx`'s avatar button opens a hidden file input; on change,
+   files over 5MB are downscaled (max 1024px long edge) and re-encoded as JPEG in
+   `lib/compress-image.ts` (canvas-based, quality stepped down until it fits) before
+   upload — files already under 5MB are sent as-is. The result POSTs as `FormData` to
+   `settingsEndpoints.profileImage()` via `use-api-request.ts` (which already skips the
+   JSON `Content-Type` header for `FormData` bodies, so the browser sets the multipart
+   boundary).
+2. `backend/app/api/profile.py`'s `upload_profile_image` reads the file, validates it
+   (JPEG/PNG/WebP, 5MB max) in `backend/app/services/storage.py`, then uploads it to the
+   Supabase Storage `avatars` bucket using the same user JWT that authenticated the
+   request — Storage RLS (policy `avatars_owner_write`) restricts writes to the caller's
+   own `{user_id}/` folder.
+3. The returned public URL (cache-busted with `?v=<timestamp>`) is written to
+   `users.profile_image` and the updated `ProfileRead` is returned, so the frontend
+   updates the avatar immediately.
+
 ## Not yet wired
 
 - `worker/` (Celery) has no task producers yet — nothing in the frontend or backend
