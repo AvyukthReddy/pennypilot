@@ -13,11 +13,14 @@ request-flow maps).
   email confirm callback. Frontend proxy/middleware (`frontend/src/proxy.ts`,
   `lib/supabase/middleware.ts`) gates access; backend verifies Supabase JWTs
   (`backend/app/core/security.py`).
-- **Profile**: `profiles` table lives in Supabase Postgres, managed via SQLAlchemy +
-  Alembic (`backend/app/models/profile.py`). `GET/PUT /api/profile` exposed with CORS.
-  Frontend account settings page (`frontend/src/app/settings/`) reads/writes it through
-  the shared API service layer (`frontend/src/services/app.service.ts`,
-  `hooks/use-api-request.ts`).
+- **Profile**: `users` table (renamed from `profiles`, adds `created_at`, `updated_at`,
+  `profile_image`) lives in Supabase Postgres, managed via SQLAlchemy + Alembic
+  (`backend/app/models/user.py`, model class `User`). `GET/PUT /api/profile` exposed
+  with CORS — route/schema names still say "profile" (`backend/app/schemas/profile.py`,
+  `backend/app/api/profile.py`) since that's the settings-page contract, only the
+  underlying table/model was renamed. Frontend account settings page
+  (`frontend/src/app/settings/`) reads/writes it through the shared API service layer
+  (`frontend/src/services/app.service.ts`, `hooks/use-api-request.ts`).
 - **Worker**: `worker/` scaffolded (Celery) but no tasks implemented yet beyond the
   placeholder in `worker/worker/tasks.py`.
 - **Shared**: `shared/` is empty — intended for cross-service Pydantic models/enums once
@@ -25,8 +28,9 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: account settings page
-  (profile + password), see `git log -1`.
+- Nothing currently in flight. Last completed unit of work: renamed `profiles` table to
+  `users` and added `created_at`/`updated_at`/`profile_image` columns (migration
+  `f63aac5142d7`, applied to Supabase).
 
 ## Known broken / rough edges
 

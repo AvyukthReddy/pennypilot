@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import CurrentUser, get_current_user
-from app.models.profile import Profile
+from app.models.user import User
 from app.schemas.profile import ProfileRead, ProfileUpdate
 
 router = APIRouter()
@@ -16,8 +16,8 @@ router = APIRouter()
 def get_profile(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> Profile | ProfileRead:
-    profile = db.get(Profile, uuid.UUID(user.id))
+) -> User | ProfileRead:
+    profile = db.get(User, uuid.UUID(user.id))
     return profile if profile is not None else ProfileRead()
 
 
@@ -26,11 +26,11 @@ def update_profile(
     payload: ProfileUpdate,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> Profile:
+) -> User:
     user_id = uuid.UUID(user.id)
-    profile = db.get(Profile, user_id)
+    profile = db.get(User, user_id)
     if profile is None:
-        profile = Profile(user_id=user_id)
+        profile = User(user_id=user_id)
         db.add(profile)
 
     for field, value in payload.model_dump(exclude_unset=True).items():

@@ -4,6 +4,29 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-15 — Renamed `profiles` table to `users`; kept `/api/profile` route and schema names as-is
+
+Migration `f63aac5142d7` renames `public.profiles` to `public.users` and adds
+`created_at`, `updated_at` (both `server_default=now()`, `updated_at` also has
+`onupdate=func.now()` so ORM-driven updates bump it), and `profile_image`
+(nullable `VARCHAR(500)`, no upload endpoint yet — just a column for a future image
+URL). The SQLAlchemy model moved from `app/models/profile.py` (`Profile`) to
+`app/models/user.py` (`User`) to match the table it maps to.
+
+The API route (`/api/profile`), Pydantic schema names (`ProfileRead`/`ProfileUpdate`,
+`app/schemas/profile.py`), and router file (`app/api/profile.py`) were deliberately
+**not** renamed.
+
+**Why**: "profile" is the settings-page feature/contract the frontend already depends
+on; "users" is what the underlying table should be called now that it's gaining
+account-level fields (timestamps, avatar) beyond pure profile data. Renaming the route
+too would touch the frontend (`frontend/src/constants/endpoints/settings.endpoints.ts`)
+for no functional gain and wasn't part of the request.
+
+**How to apply**: if this table grows further into a general "account" concept, revisit
+whether `/api/profile` should become `/api/account` or `/api/user` — but don't rename
+routes speculatively; only when a concrete new feature forces the question.
+
 ## 2026-08-11 — API architecture split: Server Actions for auth only, FastAPI for everything else
 
 Next.js Server Actions (`frontend/src/app/**/actions.ts`) are scoped to Supabase auth

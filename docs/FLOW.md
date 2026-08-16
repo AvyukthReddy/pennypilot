@@ -25,7 +25,7 @@ the gaps between files, so this only earns its keep if it stays accurate.
 3. Request carries the Supabase JWT (from the client-side Supabase session); FastAPI
    verifies it in `backend/app/core/security.py` before the route handler runs.
 4. `backend/app/api/profile.py` (`GET/PUT /api/profile`) reads/writes through the
-   SQLAlchemy model in `backend/app/models/profile.py`
+   `User` SQLAlchemy model in `backend/app/models/user.py` (maps to the `users` table)
    (schema validated by `backend/app/schemas/profile.py`) against Supabase Postgres via
    `backend/app/core/db.py`.
 5. CORS is configured in `backend/app/main.py` to allow the frontend origin.
