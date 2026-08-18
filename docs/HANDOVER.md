@@ -33,17 +33,31 @@ request-flow maps).
   first (`frontend/src/lib/compress-image.ts`, canvas resize + JPEG re-encode) rather
   than rejected — the backend's 5MB check stays as a safety net for anyone hitting the
   API directly.
+- **Statement upload**: `GET/POST/DELETE /api/statements` +
+  `GET /api/statements/{id}/view` (`backend/app/api/statements.py`) store uploaded
+  bank/credit-card statements (PDF/CSV, 20MB max) in a `statements` table
+  (`backend/app/models/statement.py`) and a private Supabase Storage `statements`
+  bucket (RLS policy `statements_owner_all`), same trust model as avatars — see
+  [DECISIONS.md](DECISIONS.md). Viewing a file goes through a short-lived (120s)
+  Supabase signed URL (`get_statement_view_url` in `services/storage.py`) since the
+  bucket is private, unlike avatars' public URL. Frontend page at
+  `frontend/src/app/statements/` (`components/statements-list.tsx`), linked from the
+  navbar. **Scope is deliberately upload/list/view/delete only** — nothing parses the
+  file contents into transactions yet; `Statement.status` exists for a future parsing
+  pipeline to use.
 - **Worker**: `worker/` scaffolded (Celery) but no tasks implemented yet beyond the
-  placeholder in `worker/worker/tasks.py`.
+  placeholder in `worker/worker/tasks.py`. Statement parsing is the likely first real
+  use of it, but that wasn't built this pass.
 - **Shared**: `shared/` is empty — intended for cross-service Pydantic models/enums once
   a feature needs backend and worker to agree on a type.
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: profile image upload
-  (`POST /api/profile/image` + settings page UI), backed by a new Supabase Storage
-  `avatars` bucket. Not yet verified in a live browser session — Chrome extension
-  wasn't connected when this was built; verified via `tsc`/lint/pytest only.
+- Nothing currently in flight. Last completed unit of work: statement upload
+  (`GET/POST/DELETE /api/statements` + `/statements` page UI), backed by a new private
+  Supabase Storage `statements` bucket. Verified via `pytest` + `tsc --noEmit` +
+  `eslint`, and confirmed working end-to-end by the user in a real browser (upload,
+  list, view, delete) — see docs/bugs-features/2026-08-17-statement-upload.md.
 
 ## Known broken / rough edges
 
@@ -51,6 +65,11 @@ request-flow maps).
   logged-in browser session yet — only unit-tested (auth mocked, `upload_avatar`
   monkeypatched). Worth a manual pass through the settings page before considering it
   done.
+- (Resolved) Local dev backend briefly ran on port 8001 as a workaround for a stuck
+  :8000 process. That process cleared on its own; backend is back on the repo default
+  :8000 and `frontend/.env.local` points there again. See
+  docs/bugs-features/2026-08-17-statement-upload.md for the full story if :8000 ever
+  gets stuck again.
 
 ## What to avoid
 
@@ -61,4 +80,6 @@ request-flow maps).
 
 ## Next up
 
-- Not yet decided — check with the user before picking the next feature.
+- Not otherwise decided — check with the user before picking the next feature. Parsing
+  uploaded statements into transactions is the obvious next candidate but wasn't
+  scoped/agreed yet.

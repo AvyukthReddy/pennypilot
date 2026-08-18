@@ -48,7 +48,37 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `users.profile_image` and the updated `ProfileRead` is returned, so the frontend
    updates the avatar immediately.
 
+## Statement upload (statements page)
+
+1. `frontend/src/app/statements/page.tsx` renders `components/statements-list.tsx`,
+   reachable via the "Statements" link in `components/navbar.tsx`.
+2. On mount, the component GETs `settingsEndpoints`-style
+   `constants/endpoints/statements.endpoints.ts` → `/api/statements` through
+   `hooks/use-api-request.ts` to list the signed-in user's statements.
+3. Choosing a file (PDF/CSV, ≤20MB, checked client-side first) POSTs it as `FormData`
+   to the same `/api/statements` path.
+4. `backend/app/api/statements.py`'s `upload_statement_file` reads the file and calls
+   `upload_statement` in `backend/app/services/storage.py`, which validates
+   type/size server-side and uploads to the private Supabase Storage `statements`
+   bucket under `{user_id}/{statement_id}.{ext}`, using the caller's own JWT — Storage
+   RLS (`statements_owner_all`) restricts access to the caller's own folder.
+5. A `Statement` row (`backend/app/models/statement.py`) is written via SQLAlchemy
+   with `status="uploaded"`, and the `StatementRead` schema (no `storage_path` field)
+   is returned so the frontend can show the new entry immediately.
+6. Clicking "View" GETs `/api/statements/{id}/view`, which checks ownership (shared
+   `_get_owned_statement` helper) and calls `get_statement_view_url` in `storage.py` to
+   mint a short-lived (120s) Supabase Storage signed URL — the bucket is private, so
+   there's no standing public URL to hand back. The frontend opens a blank tab
+   synchronously on click (to dodge popup blockers), then redirects it to the signed
+   URL once the response arrives.
+7. Removing a statement DELETEs `/api/statements/{id}`, which checks the row belongs to
+   the caller (same `_get_owned_statement` helper), deletes the Storage object via
+   `delete_statement`, then deletes the row.
+
 ## Not yet wired
+
+- Statement parsing: uploaded files are stored as-is; nothing reads their contents into
+  transactions yet. `Statement.status` stays `"uploaded"` forever until that's built.
 
 - `worker/` (Celery) has no task producers yet — nothing in the frontend or backend
   enqueues a job. Document the flow here once the first task is added.

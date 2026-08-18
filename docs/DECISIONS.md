@@ -4,6 +4,34 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-17 — Statement upload: scoped to upload/list/delete only, private bucket (unlike avatars' public one)
+
+`POST/GET/DELETE /api/statements` (`backend/app/api/statements.py`) store uploaded
+bank/credit-card statements (PDF or CSV, 20MB max) in a new `statements` table
+(`backend/app/models/statement.py`, migration `684dfcb36717`) and a new private
+Supabase Storage bucket (`statements`, `public=false`), following the same
+caller's-own-JWT + folder-scoped-RLS pattern as the `avatars` bucket
+(`statements_owner_all` policy, `for all` rather than avatars' insert-only policy,
+since statements also need delete). `upload_statement`/`delete_statement` were added to
+the existing `backend/app/services/storage.py` rather than a new module — one file for
+all Supabase Storage interactions was simpler than splitting per bucket at this size.
+Parsing the uploaded file into transactions was deliberately **not** built in this
+pass — `Statement.status` defaults to `"uploaded"` and exists specifically so a future
+parsing pipeline (likely the still-unused Celery `worker/`) has somewhere to record
+progress without a schema change.
+
+**Why**: (1) Avatars are meant to be publicly displayable; bank statements are
+sensitive financial documents, so the bucket is private and no public URL is ever
+generated or stored — only the internal `storage_path`, which `StatementRead` does not
+expose. (2) Scoping to upload/list/delete (no parsing) was a deliberate choice made
+with the user up front, to keep this session's change small and defer the bigger
+architectural decision (sync parse in FastAPI vs. async via the Celery worker, and what
+`shared/` types that would need) to when it's actually needed.
+
+**How to apply**: when parsing is built, add a `parsed_at`/error columns or a separate
+`transactions` table rather than overloading `status` with parse-result data, and
+revisit whether `worker/` should get its first real task then.
+
 ## 2026-08-15 — Profile image upload: backend-proxied to Supabase Storage, bucket/RLS created via direct SQL
 
 `POST /api/profile/image` takes a multipart upload, validates it in
