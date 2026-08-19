@@ -80,19 +80,20 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `processing`, and renders `parse_error` under the status line once parsing
    finishes (or fails/warns) — see "Statement parsing" below.
 
-## Statement ingestion + analysis (upload → Document, Phase 1+2 — no parser yet)
+## Statement ingestion, analysis, and understanding (upload → Document, Phase 1+2+3 — no transaction parser yet)
 
 Earlier parsing-pipeline attempts (`worker/worker/parsing/`) were deleted entirely —
 never committed, so no history to preserve. See `docs/DECISIONS.md`'s "Statement
-parsing scoped down to Phase 1" entry. This is intentionally Phase 1+2 only: get a
-clean, well-described `Document` in front of a future parser, nothing more.
+parsing scoped down to Phase 1" entry. Transaction-line extraction (Phase 4) still
+doesn't exist — this covers ingestion, page/text extraction, and document-level
+classification only.
 
 1. In `upload_statement_file` (`backend/app/api/statements.py`), right after the
    `Statement` row is created: a SHA-256 `file_hash` of the uploaded bytes is checked
    against the caller's existing statements — a match short-circuits with `409` before
    any Storage/DB write. On a fresh file, a 600s Supabase signed URL is minted
    (`get_statement_view_url`) and `enqueue_parse_statement` (`backend/app/core/
-   celery_client.py`) publishes a `worker.parse_statement` task (by name only — the
+celery_client.py`) publishes a `worker.parse_statement` task (by name only — the
    backend never imports worker code) onto the Redis broker (`settings.redis_url`).
    On success, `Statement.status` becomes `"queued"`; if enqueueing itself fails, the
    statement stays `"uploaded"` (a documented terminal state meaning "stored, not yet
@@ -128,20 +129,41 @@ clean, well-described `Document` in front of a future parser, nothing more.
    `status="ingested"` — `needs_ocr=true` is a flag, not a failure.
 6. Any unhandled exception past the download step rolls back, sets `status="failed"`
    with a truncated exception message, and re-raises so Celery still logs it.
+7. When the statement is a PDF with real text (`not needs_ocr` and `pages` non-empty),
+   `worker/worker/document_understanding.py`'s `DocumentUnderstandingService.analyze`
+   feeds each page's `text` to an `AIProvider` (`worker/worker/ai_provider.py` — a
+   thin wrapper over any OpenAI-compatible endpoint, configured via
+   `AI_BASE_URL`/`MODEL_API_KEY`/`AI_MODEL`; defaults to Hugging Face's Inference
+   Providers router serving Qwen2.5-VL-7B-Instruct) and validates the reply against
+   the closed `DocumentAnalysis` Pydantic schema (`worker/worker/document_analysis.py`)
+   — document type, institution, account type/last4, currency, statement period,
+   and page-ranged `sections`. Invalid JSON triggers one self-repair retry before
+   giving up. This step is **best-effort**: any failure (missing `MODEL_API_KEY`,
+   network error, model never returns valid JSON) is caught, logged, and leaves
+   `Statement.document_analysis` as `null` —
+   ingestion has already succeeded by this point, so classification failing doesn't
+   flip `status` to `"failed"`. See `docs/DECISIONS.md`'s 2026-08-19 "Phase 3" entry.
+   `document_analysis` is persisted as `JSONB` (migration `c3f4a5b6d7e8`) alongside
+   `pages`/`needs_ocr`/`page_count` in the same `session.commit()`.
 
-## Viewing extracted text blocks (statements page → document analysis)
+## Viewing extracted text blocks and document classification (statements page → document analysis)
 
 1. `components/statements-list.tsx` shows a "Text blocks" link per statement row when
    `status === "ingested"` and `content_type === "application/pdf"`, linking to
    `/statements/analysis?statement_id={id}&filename={filename}`.
 2. `frontend/src/app/statements/analysis/page.tsx` (server component, same auth-gate
-   pattern as `/transactions`) renders `components/statement-pages-view.tsx`, which
-   GETs `GET /api/statements/{id}/pages` (`backend/app/api/statements.py`, same
-   ownership check as `/view`) via `statementsEndpoints.pages`.
+   pattern as `/transactions`) renders `components/document-analysis-summary.tsx`
+   above `components/statement-pages-view.tsx`. The summary card GETs
+   `GET /api/statements/{id}/analysis` (`backend/app/api/statements.py`, same
+   ownership check as `/view`/`/pages`) via `statementsEndpoints.analysis`, showing
+   `document_type`/institution/account/currency/period plus a page-ranged section
+   list — or "Not yet classified" when `document_analysis` is `null` (still
+   processing, or skipped for a scanned PDF). The text-blocks viewer below it GETs
+   `GET /api/statements/{id}/pages` via `statementsEndpoints.pages`.
 3. The route returns `{ statement_id, pages }` straight from `Statement.pages`
    (`[]` if analysis hasn't finished/isn't a PDF) — validated against
    `StatementPagesRead`/`PageRead`/`TextBlockRead` (`backend/app/schemas/
-   statement.py`). Not folded into `StatementRead` (used by the statements list)
+statement.py`). Not folded into `StatementRead` (used by the statements list)
    since a multi-page statement's full text-block list is much larger than everything
    else in that response.
 4. Each page renders as a collapsible `<details>` (first page open, rest collapsed)
@@ -149,9 +171,14 @@ clean, well-described `Document` in front of a future parser, nothing more.
 
 ## Not yet wired
 
-- **Actual parsing.** `worker/worker/tasks.py` has a `# TODO(phase 3): hand
-  `document` to a real parser here.` marker at the exact seam. The `transactions`
-  table/model/API (`GET /api/transactions`) and frontend Transactions page all exist
-  and work — they just have nothing to display until a parser populates them.
+- **Transaction-line parsing.** `worker/worker/tasks.py` has a
+  `# TODO(phase 4): hand document (+ document_analysis) to a real transaction-line
+parser here.` marker at the exact seam — it now has both the extracted `Document`
+  and its `DocumentAnalysis` classification to work with, not just raw text. The
+  `transactions` table/model/API (`GET /api/transactions`) and frontend Transactions
+  page all exist and work — they just have nothing to display until a parser
+  populates them.
 - Transaction categorization (AI/merchant-based) and a full transaction-editing UI —
   depend on parsing existing first.
+- OCR/vision for scanned PDFs (`needs_ocr=true`) — still detection-only; document
+  understanding is skipped for these, not just transaction parsing.

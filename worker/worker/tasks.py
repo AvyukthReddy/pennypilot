@@ -7,6 +7,8 @@ import httpx
 from worker.celery_app import app
 from worker.db import SessionLocal
 from worker.document import Document, Page
+from worker.document_analysis import DocumentAnalysis
+from worker.document_understanding import DocumentUnderstandingService
 from worker.models import StatementRow
 from worker.pdf_analysis import analyze_pdf, is_scanned
 
@@ -26,12 +28,13 @@ def ping() -> str:
 
 @app.task(name="worker.parse_statement")
 def parse_statement(statement_id: str, signed_url: str) -> None:
-    """Phase 1+2: document ingestion and analysis. Downloads the stored file
-    exactly as uploaded (never modified), analyzes PDFs page-by-page (size,
-    text, positioned text blocks, image regions) and flags scanned/image-only
-    documents, then builds a Document — the handoff object a future parser
-    will consume. No parser exists yet, so the task stops once analysis
-    succeeds; status lands on "ingested", not "parsed"."""
+    """Phase 1+2+3: document ingestion, analysis, and understanding. Downloads
+    the stored file exactly as uploaded (never modified), analyzes PDFs
+    page-by-page (size, text, positioned text blocks, image regions), flags
+    scanned/image-only documents, then classifies what the document is
+    (bank/credit-card statement, institution, period, sections) via
+    DocumentUnderstandingService. No transaction-line parser exists yet;
+    status lands on "ingested", not "parsed"."""
     session = SessionLocal()
     try:
         stmt = session.get(StatementRow, uuid.UUID(statement_id))
@@ -78,7 +81,6 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
             pages=pages,
             needs_ocr=needs_ocr,
         )
-        # TODO(phase 3): hand `document` to a real parser here.
         logger.info(
             "statement %s: analyzed (%d pages, %d text blocks, needs_ocr=%s)",
             statement_id,
@@ -87,10 +89,28 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
             document.needs_ocr,
         )
 
+        # Best-effort classification, not a transaction parser. Ingestion has
+        # already succeeded by this point — a failure here (missing API key,
+        # network error, model never returns valid JSON) must not fail the
+        # statement, only leave it unclassified.
+        document_analysis: DocumentAnalysis | None = None
+        if stmt.content_type == "application/pdf" and not needs_ocr and pages:
+            try:
+                document_analysis = DocumentUnderstandingService().analyze(document)
+            except Exception:
+                logger.warning(
+                    "statement %s: document understanding failed", statement_id, exc_info=True
+                )
+        # TODO(phase 4): hand `document` (+ document_analysis) to a real
+        # transaction-line parser here.
+
         stmt.page_count = page_count
         stmt.parser_version = INGESTION_VERSION
         stmt.needs_ocr = needs_ocr
         stmt.pages = [asdict(page) for page in pages]
+        stmt.document_analysis = (
+            document_analysis.model_dump(mode="json") if document_analysis else None
+        )
         stmt.status = "ingested"
         session.commit()
     except Exception as exc:

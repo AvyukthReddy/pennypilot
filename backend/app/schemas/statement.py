@@ -1,5 +1,6 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -45,3 +46,24 @@ class PageRead(BaseModel):
 class StatementPagesRead(BaseModel):
     statement_id: uuid.UUID
     pages: list[PageRead]
+
+
+class DocumentSectionRead(BaseModel):
+    type: Literal["account_summary", "transactions", "fees", "interest", "disclosures", "other"]
+    pages: list[int]
+
+
+class DocumentAnalysisRead(BaseModel):
+    document_type: Literal["bank_statement", "credit_card_statement", "unknown"]
+    institution: str | None = None
+    account_type: str | None = None
+    account_last4: str | None = None
+    currency: str | None = None
+    statement_start: date | None = None
+    statement_end: date | None = None
+    sections: list[DocumentSectionRead] = []
+
+
+class StatementAnalysisRead(BaseModel):
+    statement_id: uuid.UUID
+    document_analysis: DocumentAnalysisRead | None

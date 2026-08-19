@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { DocumentAnalysisSummary } from "@/components/document-analysis-summary";
 import { Navbar } from "@/components/navbar";
 import { StatementPagesView } from "@/components/statement-pages-view";
 import { createClient } from "@/lib/supabase/server";
@@ -42,6 +43,10 @@ export default async function StatementAnalysisPage({
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{filename}</p>
           )}
         </div>
+
+        <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
+          <DocumentAnalysisSummary statementId={statementId} />
+        </section>
 
         <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
           <StatementPagesView statementId={statementId} />

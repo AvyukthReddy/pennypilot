@@ -9,7 +9,7 @@ from app.core.celery_client import enqueue_parse_statement
 from app.core.db import get_db
 from app.core.security import CurrentUser, get_current_user
 from app.models.statement import Statement
-from app.schemas.statement import StatementPagesRead, StatementRead
+from app.schemas.statement import StatementAnalysisRead, StatementPagesRead, StatementRead
 from app.services.storage import delete_statement, get_statement_view_url, upload_statement
 
 # Signed URL passed to the parse task: long enough to survive a queue backlog,
@@ -120,6 +120,16 @@ def get_statement_pages(
 ) -> dict:
     statement = _get_owned_statement(statement_id, user, db)
     return {"statement_id": statement.id, "pages": statement.pages or []}
+
+
+@router.get("/api/statements/{statement_id}/analysis", response_model=StatementAnalysisRead)
+def get_statement_analysis(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    return {"statement_id": statement.id, "document_analysis": statement.document_analysis}
 
 
 @router.delete("/api/statements/{statement_id}")

@@ -44,37 +44,57 @@ request-flow maps).
   `frontend/src/app/statements/` (`components/statements-list.tsx`), linked from the
   navbar. Uploads are deduplicated by SHA-256 (`Statement.file_hash`) — re-uploading
   the same file for the same user returns `409`.
-- **Statement ingestion + analysis (Phase 1+2 — no parser)**: after upload, a Celery
-  task (`worker.parse_statement`) downloads the stored file unmodified, then for PDFs
-  runs `worker/worker/pdf_analysis.py`'s `analyze_pdf` (via `pdfplumber`) to produce a
-  `Page` per page (`worker/worker/document.py` — `width`/`height`/`text`/`text_blocks`/
-  `images`) and `is_scanned` to flag `needs_ocr` (a scanned/image-only PDF with no real
-  text layer — detection only, no OCR runs). All of that is bundled into a `Document`
-  (bytes + `file_hash`/`size_bytes`/`page_count`/`parser_version`/`pages`/`needs_ocr`)
-  — the explicit handoff object a future parser will consume. `Statement.page_count`/
-  `parser_version`/`needs_ocr`/`pages` all get persisted (`pages` as `JSONB`,
-  migration `b2e3d4f5a6c7`), `status` becomes `"ingested"` (a scanned PDF still
-  succeeds — `needs_ocr` is a flag, not a failure). No parser exists yet — earlier
-  parsing-pipeline attempts were deleted entirely (never committed, so no history to
-  preserve). See [DECISIONS.md](DECISIONS.md)'s "Persist `Statement.pages`", "Phase 2:
-  PDF document analysis", and "Statement parsing scoped down to Phase 1" entries, and
-  `worker/worker/tasks.py`'s `# TODO(phase 3): hand document to a real parser here.`
-  marker for exactly where the next parser plugs in.
-- **Viewing extracted text blocks**: `GET /api/statements/{id}/pages`
-  (`backend/app/api/statements.py`) returns a statement's persisted `pages` (same
-  ownership check as `/view`). Frontend: a "Text blocks" link per statement row
-  (`components/statements-list.tsx`, shown for `status === "ingested"` PDFs) opens
-  `/statements/analysis` (`components/statement-pages-view.tsx`) — each page as a
-  collapsible section with a table of `text_blocks` (`x`/`y`/`width`/`height`/`text`).
-  This is a debugging/inspection view, not part of the intended end-user product
-  surface — it exists so extraction quality can be checked against real statements
-  before Phase 3 (a real parser) gets built on top of it.
+- **Statement ingestion, analysis, and understanding (Phase 1+2+3 — no transaction
+  parser)**: after upload, a Celery task (`worker.parse_statement`) downloads the
+  stored file unmodified, then for PDFs runs `worker/worker/pdf_analysis.py`'s
+  `analyze_pdf` (via `pdfplumber`) to produce a `Page` per page
+  (`worker/worker/document.py` — `width`/`height`/`text`/`text_blocks`/`images`) and
+  `is_scanned` to flag `needs_ocr` (a scanned/image-only PDF with no real text layer
+  — detection only, no OCR runs). When there's real extracted text,
+  `worker/worker/document_understanding.py`'s `DocumentUnderstandingService.analyze`
+  then classifies the document (bank/credit-card statement, institution, account,
+  currency, period, page-ranged sections) via Qwen2.5-VL-7B-Instruct over Hugging
+  Face's Inference Providers router (free tier), validated against the closed
+  `DocumentAnalysis` Pydantic schema (`worker/worker/document_analysis.py`) with
+  one self-repair retry on
+  invalid JSON — best-effort, never fails the statement.
+  `Statement.page_count`/`parser_version`/`needs_ocr`/`pages`/`document_analysis`
+  all get persisted (`pages`/`document_analysis` as `JSONB`, migrations
+  `b2e3d4f5a6c7`/`c3f4a5b6d7e8`), `status` becomes `"ingested"` (a scanned PDF, or
+  one the model failed to classify, still succeeds). No transaction-line parser
+  exists yet — earlier parsing-pipeline attempts were deleted entirely (never
+  committed, so no history to preserve). See [DECISIONS.md](DECISIONS.md)'s "Phase
+  3: document understanding", "Persist `Statement.pages`", "Phase 2: PDF document
+  analysis", and "Statement parsing scoped down to Phase 1" entries, and
+  `worker/worker/tasks.py`'s `# TODO(phase 4): hand document (+ document_analysis)
+to a real transaction-line parser here.` marker for exactly where the next parser
+  plugs in.
+- **Viewing extracted text blocks and document classification**:
+  `GET /api/statements/{id}/pages` and `GET /api/statements/{id}/analysis`
+  (`backend/app/api/statements.py`) return a statement's persisted `pages`/
+  `document_analysis` (same ownership check as `/view`). Frontend: a "Text blocks"
+  link per statement row (`components/statements-list.tsx`, shown for
+  `status === "ingested"` PDFs) opens `/statements/analysis`, which renders
+  `components/document-analysis-summary.tsx` (document type/institution/account/
+  currency/period + section list, or "Not yet classified") above
+  `components/statement-pages-view.tsx` (each page as a collapsible section with a
+  table of `text_blocks`). This is a debugging/inspection view, not part of the
+  intended end-user product surface — it exists so extraction/classification
+  quality can be checked against real statements before Phase 4 (a real transaction
+  parser) gets built on top of it.
 - **Worker**: `worker/` (Celery) has one task (`worker.parse_statement`,
-  `worker/worker/tasks.py`, ingestion + analysis) with its own DB access layer
-  (`worker/worker/config.py`, `db.py`, `models.py` — hand-mirrored, non-authoritative
-  mappings; Alembic in `backend/` remains the sole schema authority). Dependencies:
-  `celery[redis]`, `sqlalchemy`, `psycopg`, `httpx`, `pdfplumber`, `python-dotenv` —
-  `pypdf` was retired in favor of pdfplumber doing the whole job (page count included).
+  `worker/worker/tasks.py`, ingestion + analysis + understanding) with its own DB
+  access layer (`worker/worker/config.py`, `db.py`, `models.py` — hand-mirrored,
+  non-authoritative mappings; Alembic in `backend/` remains the sole schema
+  authority). Dependencies: `celery[redis]`, `sqlalchemy`, `psycopg`, `httpx`,
+  `pdfplumber`, `python-dotenv`, `pydantic`, `openai` — `pypdf` was retired earlier
+  in favor of pdfplumber; `pydantic` was removed then re-added once Phase 3 needed
+  schema validation (see [DECISIONS.md](DECISIONS.md)). `openai` is used purely as
+  the client inside `worker/worker/ai_provider.py`'s `AIProvider` — a thin wrapper
+  over any OpenAI-compatible endpoint, not an OpenAI account. Which provider/model
+  actually runs is pure config (`AI_BASE_URL`/`MODEL_API_KEY`/`AI_MODEL`), defaulting
+  to Hugging Face's router (OpenRouter was tried first but has no free-tier Qwen
+  model at all).
 - **Shared**: `shared/shared/schemas/transaction.py` (`ParsedTransaction`) is left in
   place but **unused** — no service currently depends on it. It's a plausible starting
   point for whatever contract the next parser needs, not active code. The Docker
@@ -92,13 +112,20 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: Phase 2 document
-  analysis — `worker/worker/pdf_analysis.py` (pdfplumber-based `analyze_pdf`/
-  `is_scanned`) extracts per-page text/text_blocks/images and flags `needs_ocr`; both
-  persisted on `Statement` (`needs_ocr`, `pages` as `JSONB`) and viewable via a new
-  `GET /api/statements/{id}/pages` + frontend "Text blocks" page. No OCR/vision and no
-  transaction extraction yet — see [DECISIONS.md](DECISIONS.md)'s 2026-08-19 entries.
-  Backend (35 tests) and worker (8 tests) pass.
+- Nothing currently in flight. Last completed unit of work: Phase 3 document
+  understanding — `worker/worker/document_understanding.py`'s
+  `DocumentUnderstandingService` classifies statements via an `AIProvider`
+  (`worker/worker/ai_provider.py`, config-driven `AI_BASE_URL`/`MODEL_API_KEY`/
+  `AI_MODEL` — no model/provider hard-coded in the pipeline), defaulting to
+  Qwen2.5-VL-7B-Instruct over Hugging Face's Inference Providers router (free
+  tier, `featherless-ai` provider), validated against the closed
+  `DocumentAnalysis` schema; persisted on `Statement.document_analysis` (`JSONB`)
+  and viewable via a new `GET /api/statements/{id}/analysis` + a summary card on
+  the `/statements/analysis` page. Best-effort — never fails ingestion. Requires
+  `MODEL_API_KEY` set (optional; skipped with a logged warning if unset). No
+  OCR/vision and no transaction-line extraction yet — see
+  [DECISIONS.md](DECISIONS.md)'s 2026-08-19 entries. Backend (39 tests) and worker
+  (13 tests) pass.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not
   actually been run. Do that before relying on the containerized stack. (The
@@ -111,13 +138,22 @@ request-flow maps).
   logged-in browser session yet — only unit-tested (auth mocked, `upload_avatar`
   monkeypatched). Worth a manual pass through the settings page before considering it
   done.
-- **No parser exists.** Every ingested statement lands at `status="ingested"` with an
-  empty `transactions` table behind it — this is the current, intended state of
-  Phase 1+2, not a bug. The Transactions page/API work correctly, they just have
-  nothing to show until Phase 3 (a real parser) exists.
+- **No transaction-line parser exists.** Every ingested statement lands at
+  `status="ingested"` with an empty `transactions` table behind it — this is the
+  current, intended state of Phase 1+2+3, not a bug. The Transactions page/API work
+  correctly, they just have nothing to show until Phase 4 (a real parser) exists.
 - **No OCR/vision exists.** `Statement.needs_ocr` gets set for scanned/image-only
-  PDFs, but nothing acts on it yet — flagged only, not processed. Frontend doesn't
-  surface this flag anywhere either.
+  PDFs, but nothing acts on it yet — flagged only, not processed. Document
+  understanding is skipped entirely for these too (see above).
+- **Document understanding needs `MODEL_API_KEY`.** Without it, every PDF statement
+  ingests fine but `document_analysis` stays `null` forever (a logged warning, not
+  a crash). With the default provider (Hugging Face), get a free token at
+  hf.co/settings/tokens (with "Make calls to Inference Providers" permission) and
+  set it as `MODEL_API_KEY` in `.env`. To benchmark or swap models, change
+  `AI_BASE_URL`/`AI_MODEL` (and `MODEL_API_KEY` if the provider differs) — no code
+  change needed, see `worker/worker/ai_provider.py`. Also worth knowing: the
+  default is a free-tier 7B model, not a frontier one — expect it to occasionally
+  misclassify unusual statement formats or leave fields `null`.
 - **`REDIS_URL` in `.env` (`redis://redis:6379/0`) is a Docker Compose service
   hostname — it only resolves inside Docker's network.** Running the backend or the
   Celery worker locally (outside Docker, e.g. `uvicorn --reload` / `poetry run celery`
@@ -140,12 +176,16 @@ request-flow maps).
 
 ## Next up
 
-- Phase 3: build a real parser that consumes the `Document` object
-  (`worker/worker/document.py`, now including `pages`/`needs_ocr`) and produces
-  `transactions` rows — the seam is marked with a `# TODO(phase 3)` comment in
-  `worker/worker/tasks.py`. Not yet scoped/agreed how (deterministic vs.
-  LLM-assisted, bank-specific vs. generic) — discuss with the user before starting.
+- Phase 4: build a real transaction-line parser that consumes the `Document` object
+  (`worker/worker/document.py`) _and_ its `DocumentAnalysis` classification
+  (`worker/worker/document_analysis.py` — which pages hold `transactions` sections)
+  and produces `transactions` rows — the seam is marked with a
+  `# TODO(phase 4)` comment in `worker/worker/tasks.py`. Not yet scoped/agreed how
+  (deterministic vs. LLM-assisted, bank-specific vs. generic) — discuss with the
+  user before starting.
 - OCR/vision for scanned PDFs (`Statement.needs_ocr=true`) — detection exists,
-  nothing consumes the flag yet. Also not yet scoped (which OCR engine/vision API,
-  whether it produces the same `Page`/`text_blocks` shape or something else).
-- Run the Docker build once Docker Desktop is available (see "In progress" above).
+  nothing consumes the flag yet, and document understanding is skipped for these
+  too. Also not yet scoped (which OCR engine/vision API, whether it produces the
+  same `Page`/`text_blocks` shape or something else).
+- Run the Docker build once Docker Desktop is available (see "In progress" above) —
+  note the worker image will need to build `pydantic`/`openai` now too.

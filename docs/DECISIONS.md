@@ -4,6 +4,71 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-19 — Phase 3: document understanding (AIProvider abstraction, Qwen2.5-VL-7B via Hugging Face by default, supersedes pydantic removal)
+
+Answers "what is this document?" — not a transaction extraction. New
+`worker/worker/document_understanding.py`'s `DocumentUnderstandingService.analyze
+(document) -> DocumentAnalysis` feeds each page's already-extracted `text` (from
+Phase 2, not `text_blocks`/coordinates — classification doesn't need layout) to an
+LLM and gets back a **closed Pydantic schema**
+(`worker/worker/document_analysis.py`): `document_type` (a `Literal`), institution,
+account type/last4, currency, statement period, and `sections` (page ranges by
+content type, `type` also a closed `Literal`) — never arbitrary JSON.
+
+**No hard-coded model or provider.** `worker/worker/ai_provider.py`'s `AIProvider`
+wraps any OpenAI-compatible chat completions endpoint — `base_url`/`api_key`/
+`model` all come from `AIProviderConfig`, built from three env vars
+(`AI_BASE_URL`/`MODEL_API_KEY`/`AI_MODEL`, `worker.config.default_ai_provider_config`).
+`DocumentUnderstandingService` takes an `AIProvider` (constructor-injected,
+defaulting to the configured one) rather than building a model client itself —
+benchmarking or swapping models/providers is an env change, never a code change to
+`document_understanding.py`'s extraction pipeline. The `openai` Python package is
+used purely as the OpenAI-compatible HTTP client; no OpenAI account involved.
+
+**Default: Qwen2.5-VL-7B-Instruct via Hugging Face's Inference Providers router**
+(`AI_BASE_URL=https://router.huggingface.co/v1`, `AI_MODEL=Qwen/Qwen2.5-VL-7B-
+Instruct:featherless-ai`, needs `MODEL_API_KEY` — a free Hugging Face access token
+with "Make calls to Inference Providers" permission) — the user's explicit choice,
+prioritizing $0 inference cost. OpenRouter was tried first but has no free-tier
+Qwen model at all (confirmed against its live `/api/v1/models` catalog — the 7B VL
+variant isn't even listed anymore, and no other Qwen model there has a `:free`
+tier); Hugging Face's own router does serve this exact model, through the
+`featherless-ai` provider (confirmed via
+`https://huggingface.co/api/models/Qwen/Qwen2.5-VL-7B-Instruct?expand[]=inferenceProviderMapping`).
+The `:featherless-ai` suffix pins that provider explicitly rather than HF's default
+`:fastest` auto-selection. This is only the _default_ — any of the three env vars
+can be overridden independently to point at a different provider/model entirely.
+
+**Prompt-based JSON + Pydantic validation with one self-repair retry**, not native
+structured-output/tool-calling. A free 7B model behind a routing layer isn't
+guaranteed to honor `response_format`/forced tool-use as reliably as a frontier
+model. On invalid JSON (or a response wrapped in a ` ```json ` fence, which small
+models commonly do despite instructions not to), the service re-prompts once with
+the validation error and asks for a corrected response before raising
+`DocumentUnderstandingError`.
+
+**Best-effort, non-fatal.** By the time this runs, ingestion and Phase 2 analysis
+have already succeeded — a classification failure (missing API key, network error,
+model never returns valid JSON) must not flip `Statement.status` to `"failed"`; it
+just leaves `document_analysis` as `null`, same philosophy as `needs_ocr` detection.
+Skipped entirely (not even attempted) when `needs_ocr=true` or a PDF has no
+extracted pages — feeding near-empty text would just produce garbage; understanding
+a scanned statement waits for the eventual OCR/vision pass, still unbuilt.
+
+**Persisted as `Statement.document_analysis`** (nullable `JSONB`, migration
+`c3f4a5b6d7e8`), same pattern as `pages` — exposed via a new
+`GET /api/statements/{id}/analysis` (not folded into `StatementRead`, same
+reasoning as `/pages`) and shown as a summary card on the existing
+`/statements/analysis` page, above the text-blocks viewer that page already had.
+
+**Supersedes the 2026-08-18 entry that removed `pydantic` from `worker/`** (dropped
+along with `pypdf`/`shared/` when parsing was rescoped to Phase 1, on the grounds
+that nothing used it). This feature genuinely needs schema validation for LLM
+output — the removal predates that need. `worker/worker/document_analysis.py`
+defines its own copy of the schema rather than reviving a `shared/` dependency or
+importing from `backend/`, same decoupling precedent as `worker/worker/models.py`
+hand-mirroring the backend's SQLAlchemy models.
+
 ## 2026-08-19 — Fix empty-state flash: move `hasFetchedOnce` into `useApiRequest` as `hasSettled`
 
 The `hasFetchedOnce` pattern each list component hand-rolled (`statements-list.tsx`,
@@ -113,7 +178,7 @@ for PDFs, count pages (`pypdf`) → build a `Document` dataclass
 `page_count`/`parser_version` — the explicit handoff object a future parser will
 consume — → persist `page_count`/`parser_version` on the `Statement` row → status
 becomes `"ingested"`. `INGESTION_VERSION` is a bumped constant recording which version
-of *this* pipeline touched a document, so a later, smarter ingestion pass can identify
+of _this_ pipeline touched a document, so a later, smarter ingestion pass can identify
 what needs redoing. Worker DB access (`worker/worker/models.py`) is a separate,
 hand-mirrored SQLAlchemy mapping, not an import of `backend/app/models` — backend +
 Alembic remain the sole schema authority, this trades a small hand-sync burden for
@@ -149,7 +214,7 @@ loads the root `.env` directly — worker didn't have that, so after making
 `DATABASE_URL` a hard-required env var (see the same day's earlier fix, prompted by a
 different review comment about the module having a hardcoded fallback connection
 string), running the worker locally required manually exporting both `DATABASE_URL`
-*and* `REDIS_URL` every session, which is exactly the kind of friction that gets
+_and_ `REDIS_URL` every session, which is exactly the kind of friction that gets
 skipped and silently breaks things.
 
 Fixed by having `worker/worker/config.py` call `python-dotenv`'s `load_dotenv()` on
@@ -247,7 +312,7 @@ revisit whether `worker/` should get its first real task then.
 
 `POST /api/profile/image` takes a multipart upload, validates it in
 `backend/app/services/storage.py` (JPEG/PNG/WebP only, 5MB max), and forwards it to
-Supabase Storage's REST API using the *caller's own JWT* (added `token` to
+Supabase Storage's REST API using the _caller's own JWT_ (added `token` to
 `CurrentUser` in `backend/app/core/security.py` to make this possible) — not a
 service-role key. The `avatars` bucket and its RLS policy
 (`avatars_owner_write`, scoped to `(storage.foldername(name))[1] = auth.uid()::text`)
