@@ -16,6 +16,7 @@ class FakeSession:
     def __init__(self, statements: list[Statement] | None = None) -> None:
         self.store: dict[uuid.UUID, Statement] = {s.id: s for s in (statements or [])}
         self.deleted: list[uuid.UUID] = []
+        self.scalar_result: Statement | None = None
 
     def get(self, _model, pk):
         return self.store.get(pk)
@@ -39,6 +40,10 @@ class FakeSession:
 
     def scalars(self, _stmt):
         return list(self.store.values())
+
+    def scalar(self, _stmt):
+        # None means "no duplicate found" for the file_hash dedup check.
+        return self.scalar_result
 
 
 def _use_fake_db(session: FakeSession) -> None:
@@ -67,6 +72,11 @@ def test_upload_statement_creates_row(make_token, monkeypatch) -> None:
         "app.api.statements.upload_statement",
         lambda **kwargs: f"{kwargs['user_id']}/{kwargs['statement_id']}.pdf",
     )
+    monkeypatch.setattr(
+        "app.api.statements.get_statement_view_url",
+        lambda **kwargs: "https://example.com/signed",
+    )
+    monkeypatch.setattr("app.api.statements.enqueue_parse_statement", lambda **kwargs: None)
     token = make_token()
 
     response = client.post(
@@ -79,8 +89,66 @@ def test_upload_statement_creates_row(make_token, monkeypatch) -> None:
     body = response.json()
     assert body["filename"] == "statement.pdf"
     assert body["content_type"] == "application/pdf"
-    assert body["status"] == "uploaded"
+    assert body["status"] == "queued"
     assert body["size_bytes"] == 4
+
+
+def test_upload_statement_rejects_duplicate_file(make_token, monkeypatch) -> None:
+    existing = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="jan.pdf",
+        storage_path=f"{TEST_USER_ID}/jan.pdf",
+        content_type="application/pdf",
+        size_bytes=4,
+        status="parsed",
+        file_hash="dummy-hash",
+    )
+    session = FakeSession([existing])
+    session.scalar_result = existing
+    _use_fake_db(session)
+    upload_called = False
+
+    def _fail_if_called(**kwargs):
+        nonlocal upload_called
+        upload_called = True
+        return "should-not-be-used"
+
+    monkeypatch.setattr("app.api.statements.upload_statement", _fail_if_called)
+    token = make_token()
+
+    response = client.post(
+        "/api/statements",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("statement.pdf", b"data", "application/pdf")},
+    )
+
+    assert response.status_code == 409
+    assert upload_called is False
+    assert len(session.store) == 1
+
+
+def test_upload_statement_enqueue_failure_leaves_uploaded_status(make_token, monkeypatch) -> None:
+    _use_fake_db(FakeSession())
+    monkeypatch.setattr(
+        "app.api.statements.upload_statement",
+        lambda **kwargs: f"{kwargs['user_id']}/{kwargs['statement_id']}.pdf",
+    )
+
+    def _raise(**kwargs):
+        raise RuntimeError("supabase unreachable")
+
+    monkeypatch.setattr("app.api.statements.get_statement_view_url", _raise)
+    token = make_token()
+
+    response = client.post(
+        "/api/statements",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("statement.pdf", b"data", "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "uploaded"
 
 
 def test_list_statements_returns_uploaded(make_token) -> None:

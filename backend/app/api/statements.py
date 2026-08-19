@@ -1,14 +1,20 @@
+import hashlib
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.celery_client import enqueue_parse_statement
 from app.core.db import get_db
 from app.core.security import CurrentUser, get_current_user
 from app.models.statement import Statement
 from app.schemas.statement import StatementRead
 from app.services.storage import delete_statement, get_statement_view_url, upload_statement
+
+# Signed URL passed to the parse task: long enough to survive a queue backlog,
+# short enough to limit the exposure window of a URL that grants file access.
+PARSE_TASK_URL_EXPIRY_SECONDS = 600
 
 router = APIRouter()
 
@@ -40,6 +46,18 @@ def upload_statement_file(
     db: Session = Depends(get_db),
 ) -> Statement:
     data = file.file.read()
+    file_hash = hashlib.sha256(data).hexdigest()
+
+    duplicate = db.scalar(
+        select(Statement).where(
+            Statement.user_id == uuid.UUID(user.id), Statement.file_hash == file_hash
+        )
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="This file has already been uploaded"
+        )
+
     statement_id = uuid.uuid4()
     storage_path = upload_statement(
         user_id=user.id,
@@ -56,10 +74,30 @@ def upload_statement_file(
         storage_path=storage_path,
         content_type=file.content_type or "",
         size_bytes=len(data),
+        file_hash=file_hash,
     )
     db.add(statement)
     db.commit()
     db.refresh(statement)
+
+    try:
+        signed_url = get_statement_view_url(
+            token=user.token,
+            storage_path=storage_path,
+            expires_in=PARSE_TASK_URL_EXPIRY_SECONDS,
+        )
+        enqueue_parse_statement(statement_id=str(statement.id), signed_url=signed_url)
+    except Exception:
+        # The upload already succeeded and is durably stored; failing to kick off
+        # parsing shouldn't fail the request. The statement simply stays "uploaded"
+        # — a documented, meaningful state ("file exists, parsing not queued yet") —
+        # rather than a silent, undocumented dead end. No automatic retry this pass.
+        pass
+    else:
+        statement.status = "queued"
+        db.commit()
+        db.refresh(statement)
+
     return statement
 
 
