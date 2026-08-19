@@ -9,7 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 const QUICK_LINK_CLASSES =
   "rounded-md border-2 border-black px-4 py-2 text-sm font-medium text-black hover:bg-black hover:text-white dark:border-zinc-50 dark:text-zinc-50 dark:hover:bg-zinc-50 dark:hover:text-black";
 
-export default async function HomePage() {
+export default async function DashboardPage() {
   const supabase = createClient(await cookies());
   const {
     data: { user },

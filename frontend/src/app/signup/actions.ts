@@ -20,7 +20,7 @@ export async function signup(formData: FormData) {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { emailRedirectTo: `${origin}/auth/callback?next=/home` },
+    options: { emailRedirectTo: `${origin}/auth/callback?next=/dashboard` },
   });
 
   if (error) {
@@ -30,7 +30,7 @@ export async function signup(formData: FormData) {
   if (data.session) {
     // Project has email auto-confirm enabled — the user is already signed in.
     revalidatePath("/", "layout");
-    redirect("/home");
+    redirect("/dashboard");
   }
 
   redirect("/login?message=Check your email to confirm your account");
