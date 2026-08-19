@@ -44,24 +44,37 @@ request-flow maps).
   `frontend/src/app/statements/` (`components/statements-list.tsx`), linked from the
   navbar. Uploads are deduplicated by SHA-256 (`Statement.file_hash`) — re-uploading
   the same file for the same user returns `409`.
-- **Statement ingestion (Phase 1 — no parsing)**: after upload, a Celery task
-  (`worker.parse_statement`) downloads the stored file unmodified, counts PDF pages
-  (`worker/worker/pdf_info.py`, via `pypdf`), and builds a `Document`
-  (`worker/worker/document.py` — bytes + `file_hash`/`size_bytes`/`page_count`/
-  `parser_version`) — the explicit handoff object a future parser will consume.
-  `Statement.page_count`/`parser_version` get persisted, `status` becomes
-  `"ingested"`. No parser exists yet — earlier parsing-pipeline attempts were deleted
-  entirely (never committed, so no history to preserve). See
-  [DECISIONS.md](DECISIONS.md)'s "Statement parsing scoped down to Phase 1" entry, and
-  `worker/worker/tasks.py`'s `# TODO(phase 2): hand document to a real parser here.`
+- **Statement ingestion + analysis (Phase 1+2 — no parser)**: after upload, a Celery
+  task (`worker.parse_statement`) downloads the stored file unmodified, then for PDFs
+  runs `worker/worker/pdf_analysis.py`'s `analyze_pdf` (via `pdfplumber`) to produce a
+  `Page` per page (`worker/worker/document.py` — `width`/`height`/`text`/`text_blocks`/
+  `images`) and `is_scanned` to flag `needs_ocr` (a scanned/image-only PDF with no real
+  text layer — detection only, no OCR runs). All of that is bundled into a `Document`
+  (bytes + `file_hash`/`size_bytes`/`page_count`/`parser_version`/`pages`/`needs_ocr`)
+  — the explicit handoff object a future parser will consume. `Statement.page_count`/
+  `parser_version`/`needs_ocr`/`pages` all get persisted (`pages` as `JSONB`,
+  migration `b2e3d4f5a6c7`), `status` becomes `"ingested"` (a scanned PDF still
+  succeeds — `needs_ocr` is a flag, not a failure). No parser exists yet — earlier
+  parsing-pipeline attempts were deleted entirely (never committed, so no history to
+  preserve). See [DECISIONS.md](DECISIONS.md)'s "Persist `Statement.pages`", "Phase 2:
+  PDF document analysis", and "Statement parsing scoped down to Phase 1" entries, and
+  `worker/worker/tasks.py`'s `# TODO(phase 3): hand document to a real parser here.`
   marker for exactly where the next parser plugs in.
+- **Viewing extracted text blocks**: `GET /api/statements/{id}/pages`
+  (`backend/app/api/statements.py`) returns a statement's persisted `pages` (same
+  ownership check as `/view`). Frontend: a "Text blocks" link per statement row
+  (`components/statements-list.tsx`, shown for `status === "ingested"` PDFs) opens
+  `/statements/analysis` (`components/statement-pages-view.tsx`) — each page as a
+  collapsible section with a table of `text_blocks` (`x`/`y`/`width`/`height`/`text`).
+  This is a debugging/inspection view, not part of the intended end-user product
+  surface — it exists so extraction quality can be checked against real statements
+  before Phase 3 (a real parser) gets built on top of it.
 - **Worker**: `worker/` (Celery) has one task (`worker.parse_statement`,
-  `worker/worker/tasks.py`, ingestion only) with its own DB access layer
+  `worker/worker/tasks.py`, ingestion + analysis) with its own DB access layer
   (`worker/worker/config.py`, `db.py`, `models.py` — hand-mirrored, non-authoritative
-  mappings; Alembic in `backend/` remains the sole schema authority). Dependencies are
-  back to minimal: `celery[redis]`, `sqlalchemy`, `psycopg`, `httpx`, `pypdf`,
-  `python-dotenv` — `pdfplumber`, `pydantic`, and the `shared/` path dependency were
-  all removed since nothing uses them anymore.
+  mappings; Alembic in `backend/` remains the sole schema authority). Dependencies:
+  `celery[redis]`, `sqlalchemy`, `psycopg`, `httpx`, `pdfplumber`, `python-dotenv` —
+  `pypdf` was retired in favor of pdfplumber doing the whole job (page count included).
 - **Shared**: `shared/shared/schemas/transaction.py` (`ParsedTransaction`) is left in
   place but **unused** — no service currently depends on it. It's a plausible starting
   point for whatever contract the next parser needs, not active code. The Docker
@@ -79,11 +92,13 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: scrapped the parsing
-  pipeline entirely and rebuilt Phase 1 (document ingestion only — page count, file
-  hash, size, parser version; no transaction extraction). Backend (31 tests) and
-  worker (4 tests, down from 84 — the deleted tests were all for the deleted parsing
-  code) pass; frontend `tsc --noEmit`/`eslint` clean.
+- Nothing currently in flight. Last completed unit of work: Phase 2 document
+  analysis — `worker/worker/pdf_analysis.py` (pdfplumber-based `analyze_pdf`/
+  `is_scanned`) extracts per-page text/text_blocks/images and flags `needs_ocr`; both
+  persisted on `Statement` (`needs_ocr`, `pages` as `JSONB`) and viewable via a new
+  `GET /api/statements/{id}/pages` + frontend "Text blocks" page. No OCR/vision and no
+  transaction extraction yet — see [DECISIONS.md](DECISIONS.md)'s 2026-08-19 entries.
+  Backend (35 tests) and worker (8 tests) pass.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not
   actually been run. Do that before relying on the containerized stack. (The
@@ -97,9 +112,12 @@ request-flow maps).
   monkeypatched). Worth a manual pass through the settings page before considering it
   done.
 - **No parser exists.** Every ingested statement lands at `status="ingested"` with an
-  empty `transactions` table behind it — this is the current, intended state of Phase
-  1, not a bug. The Transactions page/API work correctly, they just have nothing to
-  show until Phase 2 (a real parser) exists.
+  empty `transactions` table behind it — this is the current, intended state of
+  Phase 1+2, not a bug. The Transactions page/API work correctly, they just have
+  nothing to show until Phase 3 (a real parser) exists.
+- **No OCR/vision exists.** `Statement.needs_ocr` gets set for scanned/image-only
+  PDFs, but nothing acts on it yet — flagged only, not processed. Frontend doesn't
+  surface this flag anywhere either.
 - **`REDIS_URL` in `.env` (`redis://redis:6379/0`) is a Docker Compose service
   hostname — it only resolves inside Docker's network.** Running the backend or the
   Celery worker locally (outside Docker, e.g. `uvicorn --reload` / `poetry run celery`
@@ -122,9 +140,12 @@ request-flow maps).
 
 ## Next up
 
-- Phase 2: build a real parser that consumes the `Document` object
-  (`worker/worker/document.py`) and produces `transactions` rows — the seam is marked
-  with a `# TODO(phase 2)` comment in `worker/worker/tasks.py`. Not yet scoped/agreed
-  how (deterministic vs. LLM-assisted, bank-specific vs. generic) — discuss with the
-  user before starting.
+- Phase 3: build a real parser that consumes the `Document` object
+  (`worker/worker/document.py`, now including `pages`/`needs_ocr`) and produces
+  `transactions` rows — the seam is marked with a `# TODO(phase 3)` comment in
+  `worker/worker/tasks.py`. Not yet scoped/agreed how (deterministic vs.
+  LLM-assisted, bank-specific vs. generic) — discuss with the user before starting.
+- OCR/vision for scanned PDFs (`Statement.needs_ocr=true`) — detection exists,
+  nothing consumes the flag yet. Also not yet scoped (which OCR engine/vision API,
+  whether it produces the same `Page`/`text_blocks` shape or something else).
 - Run the Docker build once Docker Desktop is available (see "In progress" above).

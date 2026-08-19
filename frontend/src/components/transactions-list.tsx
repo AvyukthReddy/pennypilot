@@ -44,11 +44,6 @@ export function TransactionsList({
   const [statementId, setStatementId] = useState(initialStatementId);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [total, setTotal] = useState(0);
-  // Starts false synchronously (unlike listRequest.loading, which only
-  // flips true once the effect below actually runs, a render after mount)
-  // — gating the empty-state message on this instead avoids a flash of
-  // "No transactions yet" before the first fetch has even started.
-  const [hasFetchedOnce, setHasFetchedOnce] = useState(false);
   const listRequest = useApiRequest<TransactionListResponse>();
 
   function loadMore() {
@@ -70,7 +65,6 @@ export function TransactionsList({
     listRequest
       .run(transactionsEndpoints.list({ statementId, limit: PAGE_SIZE, offset: 0 }), APP_METHOD.GET)
       .then((data) => {
-        setHasFetchedOnce(true);
         if (!data) return;
         setTotal(data.total);
         setTransactions(data.items);
@@ -103,7 +97,7 @@ export function TransactionsList({
         </div>
       )}
 
-      {(!hasFetchedOnce || listRequest.loading) && transactions.length === 0 && (
+      {(!listRequest.hasSettled || listRequest.loading) && transactions.length === 0 && (
         <ul className="flex flex-col divide-y divide-zinc-200 dark:divide-zinc-800">
           {Array.from({ length: SKELETON_ROW_COUNT }).map((_, i) => (
             <TransactionRowSkeleton key={i} />
@@ -117,7 +111,7 @@ export function TransactionsList({
         </p>
       )}
 
-      {hasFetchedOnce && !listRequest.loading && !listRequest.error && transactions.length === 0 && (
+      {listRequest.hasSettled && !listRequest.loading && !listRequest.error && transactions.length === 0 && (
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
           {statementId ? "No transactions for this statement." : "No transactions yet."}
         </p>

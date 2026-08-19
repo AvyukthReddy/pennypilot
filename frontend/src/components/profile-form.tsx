@@ -7,6 +7,7 @@ import { settingsEndpoints } from "@/constants/endpoints/settings.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
 import { compressImage } from "@/lib/compress-image";
 import { COUNTRIES } from "@/lib/countries";
+import { ProfileFormSkeleton } from "@/components/skeleton";
 
 const CURRENCIES = Array.from(new Set(COUNTRIES.map((c) => c.currency))).sort((a, b) =>
   a.localeCompare(b),
@@ -102,8 +103,8 @@ export function ProfileForm() {
     }));
   }
 
-  if (profileRequest.loading) {
-    return <p className="text-sm text-zinc-600 dark:text-zinc-400">Loading profile…</p>;
+  if (!profileRequest.hasSettled) {
+    return <ProfileFormSkeleton />;
   }
 
   if (profileRequest.error) {

@@ -31,18 +31,12 @@ function formatAmount(amount: string): string {
 export function RecentActivity() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [total, setTotal] = useState<number | null>(null);
-  // Starts false synchronously (unlike listRequest.loading, which only
-  // flips true once the effect below actually runs, a render after mount)
-  // — gating the empty-state message on this instead avoids a flash of
-  // "No transactions yet" before the first fetch has even started.
-  const [hasFetchedOnce, setHasFetchedOnce] = useState(false);
   const listRequest = useApiRequest<TransactionListResponse>();
 
   useEffect(() => {
     listRequest
       .run(transactionsEndpoints.list({ limit: RECENT_LIMIT }), APP_METHOD.GET)
       .then((data) => {
-        setHasFetchedOnce(true);
         if (!data) return;
         setTransactions(data.items);
         setTotal(data.total);
@@ -65,7 +59,7 @@ export function RecentActivity() {
         )}
       </div>
 
-      {(!hasFetchedOnce || listRequest.loading) && (
+      {(!listRequest.hasSettled || listRequest.loading) && (
         <ul className="flex flex-col divide-y divide-zinc-200 dark:divide-zinc-800">
           {Array.from({ length: RECENT_LIMIT }).map((_, i) => (
             <TransactionRowSkeleton key={i} />
@@ -79,7 +73,7 @@ export function RecentActivity() {
         </p>
       )}
 
-      {hasFetchedOnce && !listRequest.loading && !listRequest.error && total === 0 && (
+      {listRequest.hasSettled && !listRequest.loading && !listRequest.error && total === 0 && (
         <div className="flex flex-col items-start gap-3">
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
             No transactions yet. Upload a statement to get started.
