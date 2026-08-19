@@ -4,6 +4,32 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-19 — Fix empty-state flash: move `hasFetchedOnce` into `useApiRequest` as `hasSettled`
+
+The `hasFetchedOnce` pattern each list component hand-rolled (`statements-list.tsx`,
+`transactions-list.tsx`, `recent-activity.tsx`, `statement-pages-view.tsx`) was meant
+to stop "No X found" from flashing before the first fetch resolves — but it still
+flashed. Root cause: React Strict Mode double-invokes effects on mount in dev (by
+design, to catch exactly this class of bug), which fires the data-fetch effect twice.
+`services/app.service.ts`'s `getResponseAsync` aborts the first in-flight request once
+the second one starts (same dedup key) — but `useApiRequest.run()`'s
+`finally { setLoading(false) }` and each caller's `.then(() => setHasFetchedOnce(true))`
+fired **unconditionally**, even for that now-superseded first call. Its `.then()` ran
+with `data` still `undefined`, setting `hasFetchedOnce=true` while `statements`/
+`transactions`/`pages` were still empty — showing the empty-state message before the
+real (second) request had even resolved.
+
+Fixed at the root: `useApiRequest` (`frontend/src/hooks/use-api-request.ts`) now tracks
+a `latestCallId` ref, bumped on every `run()` call. A call only touches `loading`/
+`error`/`status`/the new `hasSettled` state if it's still the latest call when it
+finishes — a superseded call (any call that isn't currently the latest) returns
+`undefined` without touching any of them. `hasSettled` replaces every component's local
+`hasFetchedOnce`: true once a non-superseded call has settled (success or failure) at
+least once. This is a general correctness fix, not dev-only — the same clobbering could
+happen in production from any rapid re-fetch (fast filter changes, quick re-navigation),
+Strict Mode's double-invoke just makes it reliably reproducible on every single page
+load in dev.
+
 ## 2026-08-19 — Persist `Statement.pages` (supersedes "pages stay in-memory only")
 
 The 2026-08-19 Phase 2 entry below originally kept `Document.pages` in-memory only,

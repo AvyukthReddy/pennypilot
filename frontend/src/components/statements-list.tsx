@@ -79,11 +79,6 @@ export function StatementsList() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(null);
-  // Starts false synchronously (unlike listRequest.loading, which only
-  // flips true once the effect below actually runs, a render after mount)
-  // — gating the empty-state message on this instead avoids a flash of
-  // "No statements uploaded yet" before the first fetch has even started.
-  const [hasFetchedOnce, setHasFetchedOnce] = useState(false);
   const listRequest = useApiRequest<Statement[]>();
   const uploadRequest = useApiRequest<Statement>();
   const deleteRequest = useApiRequest<{ id: string }>();
@@ -92,7 +87,6 @@ export function StatementsList() {
 
   useEffect(() => {
     listRequest.run(statementsEndpoints.list(), APP_METHOD.GET).then((data) => {
-      setHasFetchedOnce(true);
       if (data) setStatements(data);
     });
     // listRequest.run is stable (useCallback with no deps) — safe to omit.
@@ -204,7 +198,7 @@ export function StatementsList() {
         </p>
       )}
 
-      {!hasFetchedOnce && (
+      {!listRequest.hasSettled && (
         <ul className="flex flex-col divide-y divide-zinc-200 dark:divide-zinc-800">
           {Array.from({ length: SKELETON_ROW_COUNT }).map((_, i) => (
             <StatementRowSkeleton key={i} />
@@ -221,7 +215,7 @@ export function StatementsList() {
         </p>
       )}
 
-      {hasFetchedOnce &&
+      {listRequest.hasSettled &&
         !listRequest.loading &&
         !listRequest.error &&
         statements.length === 0 && (
