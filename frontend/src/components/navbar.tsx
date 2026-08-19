@@ -15,6 +15,18 @@ export function Navbar({ email }: { email: string }) {
 
         <nav className="flex items-center gap-4">
           <Link
+            href="/statements"
+            className="text-sm font-medium text-black hover:underline dark:text-zinc-50"
+          >
+            Statements
+          </Link>
+          <Link
+            href="/transactions"
+            className="text-sm font-medium text-black hover:underline dark:text-zinc-50"
+          >
+            Transactions
+          </Link>
+          <Link
             href="/settings"
             className="text-sm font-medium text-black hover:underline dark:text-zinc-50"
           >

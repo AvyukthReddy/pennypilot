@@ -48,8 +48,81 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `users.profile_image` and the updated `ProfileRead` is returned, so the frontend
    updates the avatar immediately.
 
+## Statement upload (statements page)
+
+1. `frontend/src/app/statements/page.tsx` renders `components/statements-list.tsx`,
+   reachable via the "Statements" link in `components/navbar.tsx`.
+2. On mount, the component GETs `settingsEndpoints`-style
+   `constants/endpoints/statements.endpoints.ts` → `/api/statements` through
+   `hooks/use-api-request.ts` to list the signed-in user's statements.
+3. Choosing a file (PDF/CSV, ≤20MB, checked client-side first) POSTs it as `FormData`
+   to the same `/api/statements` path.
+4. `backend/app/api/statements.py`'s `upload_statement_file` reads the file and calls
+   `upload_statement` in `backend/app/services/storage.py`, which validates
+   type/size server-side and uploads to the private Supabase Storage `statements`
+   bucket under `{user_id}/{statement_id}.{ext}`, using the caller's own JWT — Storage
+   RLS (`statements_owner_all`) restricts access to the caller's own folder.
+5. A `Statement` row (`backend/app/models/statement.py`) is written via SQLAlchemy
+   before file_hash-based dedup and the parse-task enqueue (see "Statement parsing"
+   below); the `StatementRead` schema (no `storage_path`/`file_hash` fields) is
+   returned so the frontend can show the new entry immediately.
+6. Clicking "View" GETs `/api/statements/{id}/view`, which checks ownership (shared
+   `_get_owned_statement` helper) and calls `get_statement_view_url` in `storage.py` to
+   mint a short-lived (120s) Supabase Storage signed URL — the bucket is private, so
+   there's no standing public URL to hand back. The frontend opens a blank tab
+   synchronously on click (to dodge popup blockers), then redirects it to the signed
+   URL once the response arrives.
+7. Removing a statement DELETEs `/api/statements/{id}`, which checks the row belongs to
+   the caller (same `_get_owned_statement` helper), deletes the Storage object via
+   `delete_statement`, then deletes the row.
+8. The statements list polls `GET /api/statements` every ~4s
+   (`components/statements-list.tsx`) while any statement is `uploaded`/`queued`/
+   `processing`, and renders `parse_error` under the status line once parsing
+   finishes (or fails/warns) — see "Statement parsing" below.
+
+## Statement ingestion (upload → Document, Phase 1 — no parsing yet)
+
+Earlier parsing-pipeline attempts (`worker/worker/parsing/`) were deleted entirely —
+never committed, so no history to preserve. See `docs/DECISIONS.md`'s "Statement
+parsing scoped down to Phase 1" entry. This is intentionally Phase 1 only: get a
+clean, well-described `Document` in front of a future parser, nothing more.
+
+1. In `upload_statement_file` (`backend/app/api/statements.py`), right after the
+   `Statement` row is created: a SHA-256 `file_hash` of the uploaded bytes is checked
+   against the caller's existing statements — a match short-circuits with `409` before
+   any Storage/DB write. On a fresh file, a 600s Supabase signed URL is minted
+   (`get_statement_view_url`) and `enqueue_parse_statement` (`backend/app/core/
+   celery_client.py`) publishes a `worker.parse_statement` task (by name only — the
+   backend never imports worker code) onto the Redis broker (`settings.redis_url`).
+   On success, `Statement.status` becomes `"queued"`; if enqueueing itself fails, the
+   statement stays `"uploaded"` (a documented terminal state meaning "stored, not yet
+   queued" — no auto-retry exists).
+2. `worker/worker/tasks.py`'s `parse_statement(statement_id, signed_url)` picks up the
+   task: loads its own `StatementRow` mapping (`worker/worker/models.py` — a
+   hand-mirrored, non-authoritative copy of the backend's schema, see that file's
+   top-of-file comment), sets `status="processing"`, then `httpx.get`s the file via the
+   signed URL (never logged — a download failure surfaces only a fixed generic
+   `parse_error`, never the exception text, since it could embed the URL/token). The
+   downloaded bytes are never modified.
+3. For PDFs, `worker/worker/pdf_info.py`'s `count_pdf_pages` (via `pypdf`) records the
+   page count; an unreadable/corrupt PDF ⇒ `status="failed"`. CSVs skip this — page
+   count is `None`.
+4. A `Document` (`worker/worker/document.py`) is built: `statement_id`, `filename`,
+   `content_type`, `data`, `file_hash`, `size_bytes`, `page_count`, `parser_version`
+   (`INGESTION_VERSION` in `tasks.py`, bumped when ingestion logic changes). This is
+   the explicit handoff object a future parser will consume — nothing reads it yet.
+5. `page_count`/`parser_version` are persisted on the `Statement` row;
+   `status="ingested"` (there is no `"parsed"`/`"unsupported"` anymore — nothing
+   attempts to interpret file contents, so there's nothing to succeed or reject at
+   that level).
+6. Any unhandled exception past the download step rolls back, sets `status="failed"`
+   with a truncated exception message, and re-raises so Celery still logs it.
+
 ## Not yet wired
 
-- `worker/` (Celery) has no task producers yet — nothing in the frontend or backend
-  enqueues a job. Document the flow here once the first task is added.
-- `shared/` has no code yet — document here once backend and worker share a type.
+- **Actual parsing.** `worker/worker/tasks.py` has a `# TODO(phase 2): hand
+  `document` to a real parser here.` marker at the exact seam. The `transactions`
+  table/model/API (`GET /api/transactions`) and frontend Transactions page all exist
+  and work — they just have nothing to display until a parser populates them.
+- Transaction categorization (AI/merchant-based) and a full transaction-editing UI —
+  depend on parsing existing first.
