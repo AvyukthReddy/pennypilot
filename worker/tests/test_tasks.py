@@ -58,7 +58,17 @@ def _make_pdf(pages: int = 3) -> bytes:
     buf = io.BytesIO()
     c = canvas.Canvas(buf)
     for _ in range(pages):
-        c.drawString(50, 750, "hello")
+        c.drawString(72, 750, "07/14/2026   Coffee and pastries   $5.75")
+        c.drawString(72, 730, "07/15/2026   Monthly subscription   $12.99")
+        c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def _make_blank_pdf(pages: int = 2) -> bytes:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    for _ in range(pages):
         c.showPage()
     c.save()
     return buf.getvalue()
@@ -73,6 +83,26 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert statement.page_count == 3
     assert statement.parser_version == tasks.INGESTION_VERSION
     assert statement.parse_error is None
+    assert statement.needs_ocr is False
+
+    assert len(statement.pages) == 3
+    first_page = statement.pages[0]
+    assert first_page["page_number"] == 1
+    assert first_page["text_blocks"]
+    assert first_page["text_blocks"][0]["text"] == "07/14/2026 Coffee and pastries $5.75"
+
+
+def test_parse_statement_scanned_pdf_flagged_not_failed(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+
+    _run_task(monkeypatch, statement, _make_blank_pdf(pages=2))
+
+    assert statement.status == "ingested"
+    assert statement.page_count == 2
+    assert statement.needs_ocr is True
+    assert statement.parse_error is None
+    assert len(statement.pages) == 2
+    assert statement.pages[0]["text_blocks"] == []
 
 
 def test_parse_statement_csv_happy_path(monkeypatch) -> None:
@@ -84,6 +114,8 @@ def test_parse_statement_csv_happy_path(monkeypatch) -> None:
     assert statement.status == "ingested"
     assert statement.page_count is None
     assert statement.parser_version == tasks.INGESTION_VERSION
+    assert statement.needs_ocr is False
+    assert statement.pages == []
 
 
 def test_parse_statement_download_failure_redacts_message(monkeypatch) -> None:

@@ -4,6 +4,72 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-19 — Persist `Statement.pages` (supersedes "pages stay in-memory only")
+
+The 2026-08-19 Phase 2 entry below originally kept `Document.pages` in-memory only,
+reasoning nothing downstream consumed it yet. The user wanted to actually inspect
+extraction quality against real statements, and asked for it to be visible in the UI
+— a real consumer now exists (a person, checking the analysis worked), so that
+reasoning no longer holds. `statements.pages` is now a nullable `JSONB` column
+(migration `b2e3d4f5a6c7`), populated in `worker/worker/tasks.py` via
+`[dataclasses.asdict(page) for page in pages]` right alongside `needs_ocr`/
+`page_count`. CSVs get `pages=[]`, same as before.
+
+Exposed via a new `GET /api/statements/{id}/pages` (`backend/app/api/statements.py`,
+same ownership check as `/view`) — deliberately **not** folded into `StatementRead`
+(used by the statements list), since a multi-page PDF's full text-block list is much
+larger than the rest of that response and the list view has no use for it. Frontend:
+`frontend/src/components/statement-pages-view.tsx`, reachable via a new "Text blocks"
+link per statement row (shown only for `status === "ingested"` PDFs — CSVs have no
+pages, and unfinished/failed statements have nothing to show), rendered at
+`/statements/analysis?statement_id=...`. Each page is a collapsible `<details>`
+section with page dimensions/counts as the summary and a table of `text_blocks`
+(`x`/`y`/`width`/`height`/`text`) — first page open by default, rest collapsed, since
+a real statement can run into hundreds of blocks across many pages.
+
+`images` (bounding boxes) are persisted too, since they're already part of the `Page`
+dataclass, but nothing in the UI surfaces them yet — no consumer for those specifically.
+
+## 2026-08-19 — Phase 2: PDF document analysis (pdfplumber, in-memory Document IR, needs_ocr detection)
+
+Phase 1 left `worker/worker/document.py`'s `Document` as a flat bytes blob — nothing
+looked at what was actually on the page. Phase 2 fills that in: `worker/worker/
+pdf_analysis.py`'s `analyze_pdf()` opens each PDF with **pdfplumber** and returns a
+`list[Page]` (`worker/worker/document.py`) — per page, `width`/`height`, full `text`,
+line-grouped `text_blocks` (via `extract_text_lines()`, which already returns
+`x0`/`x1`/`top`/`bottom` per line — no hand-rolled word-clustering needed), and
+`images` (bounding boxes only, from `page.images` — no pixel bytes extracted, nothing
+consumes them yet). `pypdf` is retired; pdfplumber's own page count replaces
+`count_pdf_pages`, so the worker carries one PDF library instead of two.
+
+**pdfplumber over PyMuPDF**: PyMuPDF's `get_text("blocks")` is a closer one-line match
+for the requested shape and is faster, but it's AGPL-licensed — for a hosted app that
+serves users over a network, AGPL's copyleft trigger is a real legal question, not
+one to default into silently. pdfplumber (MIT, via pdfminer.six) avoids that, and this
+project's earlier — since-deleted — parser attempts already used it, so the extraction
+patterns aren't new territory.
+
+**Scanned-PDF detection, not OCR**: `is_scanned()` flags a PDF as `needs_ocr` when its
+average extracted characters-per-page falls below a small threshold
+(`SCANNED_TEXT_THRESHOLD` in `pdf_analysis.py`) — a cheap, good-enough signal that a
+page has no real text layer. Actual OCR/vision is explicitly **not** built this pass;
+the user's own framing was that OCR is an "eventually" step once both text and scanned
+PDFs need to feed the same downstream `Document` shape. `needs_ocr` is the one new bit
+persisted on `Statement` (migration `a1f2c3d4e5b6`, mirrored in `worker/worker/
+models.py` per that file's hand-sync convention) — it's a real, useful signal now
+(e.g. future UI: "this statement needs OCR, coming soon"), unlike full page/text-block
+data, which has no consumer yet.
+
+**`Document.pages` stays in-memory only** — not persisted as JSONB or any new table.
+Same reasoning as Phase 1: nothing downstream reads it yet (no parser exists), so
+there's nothing to gain from durability beyond what `needs_ocr`/`page_count` already
+capture. Add persistence when a real consumer (Phase 3's parser, or a debugging UI)
+actually needs to re-read page-level data without re-running analysis.
+
+`INGESTION_VERSION` bumped `"1"` → `"2"` — the analysis logic materially changed, per
+the constant's own existing convention (`worker/worker/tasks.py`'s TODO marker moved
+from "phase 2" to "phase 3" accordingly).
+
 ## 2026-08-18 — Statement parsing scoped down to Phase 1: ingestion only, no parser yet
 
 Two full parsing-pipeline implementations were built and then deleted in the same

@@ -1,13 +1,14 @@
 import logging
 import uuid
+from dataclasses import asdict
 
 import httpx
 
 from worker.celery_app import app
 from worker.db import SessionLocal
-from worker.document import Document
+from worker.document import Document, Page
 from worker.models import StatementRow
-from worker.pdf_info import count_pdf_pages
+from worker.pdf_analysis import analyze_pdf, is_scanned
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 # processed by an older version of this pipeline can be told apart from
 # ones processed by the current one (e.g. to decide what needs reprocessing
 # once a real parser exists).
-INGESTION_VERSION = "1"
+INGESTION_VERSION = "2"
 
 
 @app.task(name="worker.ping")
@@ -25,11 +26,12 @@ def ping() -> str:
 
 @app.task(name="worker.parse_statement")
 def parse_statement(statement_id: str, signed_url: str) -> None:
-    """Phase 1: document ingestion only. Downloads the stored file exactly
-    as uploaded (never modified), records its page count (PDFs) and the
-    ingestion version, and builds a Document — the handoff object a future
-    parser will consume. No parser exists yet, so the task stops once
-    ingestion succeeds; status lands on "ingested", not "parsed"."""
+    """Phase 1+2: document ingestion and analysis. Downloads the stored file
+    exactly as uploaded (never modified), analyzes PDFs page-by-page (size,
+    text, positioned text blocks, image regions) and flags scanned/image-only
+    documents, then builds a Document — the handoff object a future parser
+    will consume. No parser exists yet, so the task stops once analysis
+    succeeds; status lands on "ingested", not "parsed"."""
     session = SessionLocal()
     try:
         stmt = session.get(StatementRow, uuid.UUID(statement_id))
@@ -51,15 +53,18 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
             return
         data = response.content
 
-        page_count: int | None = None
+        pages: list[Page] = []
         if stmt.content_type == "application/pdf":
             try:
-                page_count = count_pdf_pages(data)
+                pages = analyze_pdf(data)
             except Exception:
                 stmt.status = "failed"
                 stmt.parse_error = "Could not read this PDF — it may be corrupt."
                 session.commit()
                 return
+
+        page_count = len(pages) if pages else None
+        needs_ocr = is_scanned(pages)
 
         document = Document(
             statement_id=str(stmt.id),
@@ -70,17 +75,22 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
             size_bytes=len(data),
             page_count=page_count,
             parser_version=INGESTION_VERSION,
+            pages=pages,
+            needs_ocr=needs_ocr,
         )
-        # TODO(phase 2): hand `document` to a real parser here.
+        # TODO(phase 3): hand `document` to a real parser here.
         logger.info(
-            "statement %s: ingested (%d bytes, %s pages)",
+            "statement %s: analyzed (%d pages, %d text blocks, needs_ocr=%s)",
             statement_id,
-            document.size_bytes,
-            document.page_count,
+            document.page_count or 0,
+            sum(len(page.text_blocks) for page in document.pages),
+            document.needs_ocr,
         )
 
         stmt.page_count = page_count
         stmt.parser_version = INGESTION_VERSION
+        stmt.needs_ocr = needs_ocr
+        stmt.pages = [asdict(page) for page in pages]
         stmt.status = "ingested"
         session.commit()
     except Exception as exc:

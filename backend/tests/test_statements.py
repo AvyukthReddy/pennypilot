@@ -222,6 +222,90 @@ def test_view_statement_returns_signed_url(make_token, monkeypatch) -> None:
     assert response.json() == {"url": "https://example.com/signed"}
 
 
+def test_get_statement_pages_requires_auth() -> None:
+    response = client.get(f"/api/statements/{uuid.uuid4()}/pages")
+    assert response.status_code == 401
+
+
+def test_get_statement_pages_rejects_other_users_statement(make_token) -> None:
+    other_user_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="not-mine.pdf",
+        storage_path="somewhere/not-mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        pages=[],
+    )
+    _use_fake_db(FakeSession([other_user_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{other_user_statement.id}/pages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_statement_pages_returns_empty_when_not_yet_analyzed(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="queued",
+        pages=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/pages", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pages"] == []
+
+
+def test_get_statement_pages_returns_persisted_pages(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        pages=[
+            {
+                "page_number": 1,
+                "width": 612,
+                "height": 792,
+                "text": "STARBUCKS",
+                "text_blocks": [
+                    {"text": "STARBUCKS", "x": 145.0, "y": 302.5, "width": 73.3, "height": 12.0}
+                ],
+                "images": [],
+            }
+        ],
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/pages", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["pages"]) == 1
+    assert body["pages"][0]["text_blocks"][0]["text"] == "STARBUCKS"
+
+
 def test_delete_statement_rejects_other_users_statement(make_token) -> None:
     other_user_statement = Statement(
         id=uuid.uuid4(),

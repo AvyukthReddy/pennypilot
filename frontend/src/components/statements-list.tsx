@@ -263,6 +263,14 @@ export function StatementsList() {
                     Transactions
                   </Link>
                 )}
+                {statement.status === "ingested" && statement.content_type === "application/pdf" && (
+                  <Link
+                    href={`/statements/analysis?statement_id=${statement.id}&filename=${encodeURIComponent(statement.filename)}`}
+                    className="text-sm font-medium text-black underline dark:text-zinc-50"
+                  >
+                    Text blocks
+                  </Link>
+                )}
                 <button
                   type="button"
                   onClick={() => handleView(statement.id)}

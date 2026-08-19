@@ -9,8 +9,8 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from worker.db import Base
@@ -28,6 +28,8 @@ class StatementRow(Base):
     file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parser_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    needs_ocr: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    pages: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
 
 class TransactionRow(Base):

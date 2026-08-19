@@ -80,11 +80,11 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `processing`, and renders `parse_error` under the status line once parsing
    finishes (or fails/warns) — see "Statement parsing" below.
 
-## Statement ingestion (upload → Document, Phase 1 — no parsing yet)
+## Statement ingestion + analysis (upload → Document, Phase 1+2 — no parser yet)
 
 Earlier parsing-pipeline attempts (`worker/worker/parsing/`) were deleted entirely —
 never committed, so no history to preserve. See `docs/DECISIONS.md`'s "Statement
-parsing scoped down to Phase 1" entry. This is intentionally Phase 1 only: get a
+parsing scoped down to Phase 1" entry. This is intentionally Phase 1+2 only: get a
 clean, well-described `Document` in front of a future parser, nothing more.
 
 1. In `upload_statement_file` (`backend/app/api/statements.py`), right after the
@@ -101,26 +101,55 @@ clean, well-described `Document` in front of a future parser, nothing more.
    task: loads its own `StatementRow` mapping (`worker/worker/models.py` — a
    hand-mirrored, non-authoritative copy of the backend's schema, see that file's
    top-of-file comment), sets `status="processing"`, then `httpx.get`s the file via the
-   signed URL (never logged — a download failure surfaces only a fixed generic
-   `parse_error`, never the exception text, since it could embed the URL/token). The
-   downloaded bytes are never modified.
-3. For PDFs, `worker/worker/pdf_info.py`'s `count_pdf_pages` (via `pypdf`) records the
-   page count; an unreadable/corrupt PDF ⇒ `status="failed"`. CSVs skip this — page
-   count is `None`.
+   signed URL — a download failure surfaces only a fixed generic `parse_error`, never
+   the exception text, since it could embed the URL/token. **Known gap**: httpx's own
+   request logging still prints the full signed URL (including its token) at INFO
+   level regardless — this app-level redaction doesn't suppress that. The downloaded
+   bytes are never modified.
+3. For PDFs, `worker/worker/pdf_analysis.py`'s `analyze_pdf` (via `pdfplumber`) opens
+   the file and returns one `Page` per page (`worker/worker/document.py`): `width`/
+   `height`, full `text`, line-grouped `text_blocks` (`text`/`x`/`y`/`width`/`height`
+   each), and `images` (bounding boxes only). An unreadable/corrupt PDF ⇒
+   `status="failed"`. CSVs skip this — `pages` stays `[]`, page count is `None`.
+   `is_scanned(pages)` then flags `needs_ocr` when a PDF's average
+   characters-per-page falls below a small threshold — a scanned/image-only document
+   with no real text layer. No OCR/vision runs yet; this is detection only.
 4. A `Document` (`worker/worker/document.py`) is built: `statement_id`, `filename`,
    `content_type`, `data`, `file_hash`, `size_bytes`, `page_count`, `parser_version`
-   (`INGESTION_VERSION` in `tasks.py`, bumped when ingestion logic changes). This is
-   the explicit handoff object a future parser will consume — nothing reads it yet.
-5. `page_count`/`parser_version` are persisted on the `Statement` row;
-   `status="ingested"` (there is no `"parsed"`/`"unsupported"` anymore — nothing
-   attempts to interpret file contents, so there's nothing to succeed or reject at
-   that level).
+   (`INGESTION_VERSION` in `tasks.py`, bumped when ingestion/analysis logic changes),
+   plus `pages` and `needs_ocr`. This is the explicit handoff object a future parser
+   will consume — nothing reads it for parsing purposes yet.
+5. `page_count`/`parser_version`/`needs_ocr` are persisted on the `Statement` row,
+   along with `pages` itself (serialized via `dataclasses.asdict`, stored in a `JSONB`
+   column — migration `b2e3d4f5a6c7`, see `docs/DECISIONS.md`'s 2026-08-19 "Persist
+   `Statement.pages`" entry). `status="ingested"` (there is no `"parsed"`/
+   `"unsupported"` anymore — nothing attempts to interpret file contents, so there's
+   nothing to succeed or reject at that level). A scanned PDF still reaches
+   `status="ingested"` — `needs_ocr=true` is a flag, not a failure.
 6. Any unhandled exception past the download step rolls back, sets `status="failed"`
    with a truncated exception message, and re-raises so Celery still logs it.
 
+## Viewing extracted text blocks (statements page → document analysis)
+
+1. `components/statements-list.tsx` shows a "Text blocks" link per statement row when
+   `status === "ingested"` and `content_type === "application/pdf"`, linking to
+   `/statements/analysis?statement_id={id}&filename={filename}`.
+2. `frontend/src/app/statements/analysis/page.tsx` (server component, same auth-gate
+   pattern as `/transactions`) renders `components/statement-pages-view.tsx`, which
+   GETs `GET /api/statements/{id}/pages` (`backend/app/api/statements.py`, same
+   ownership check as `/view`) via `statementsEndpoints.pages`.
+3. The route returns `{ statement_id, pages }` straight from `Statement.pages`
+   (`[]` if analysis hasn't finished/isn't a PDF) — validated against
+   `StatementPagesRead`/`PageRead`/`TextBlockRead` (`backend/app/schemas/
+   statement.py`). Not folded into `StatementRead` (used by the statements list)
+   since a multi-page statement's full text-block list is much larger than everything
+   else in that response.
+4. Each page renders as a collapsible `<details>` (first page open, rest collapsed)
+   with a table of `text_blocks` — `x`/`y`/`width`/`height`/`text`.
+
 ## Not yet wired
 
-- **Actual parsing.** `worker/worker/tasks.py` has a `# TODO(phase 2): hand
+- **Actual parsing.** `worker/worker/tasks.py` has a `# TODO(phase 3): hand
   `document` to a real parser here.` marker at the exact seam. The `transactions`
   table/model/API (`GET /api/transactions`) and frontend Transactions page all exist
   and work — they just have nothing to display until a parser populates them.
