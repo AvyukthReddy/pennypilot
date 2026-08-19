@@ -30,6 +30,7 @@ class StatementRow(Base):
     parser_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     needs_ocr: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     pages: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    document_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class TransactionRow(Base):

@@ -5,5 +5,6 @@ export const statementsEndpoints = {
   upload: () => getApiUrl("/api/statements"),
   view: (id: string) => getApiUrl(`/api/statements/${id}/view`),
   pages: (id: string) => getApiUrl(`/api/statements/${id}/pages`),
+  analysis: (id: string) => getApiUrl(`/api/statements/${id}/analysis`),
   delete: (id: string) => getApiUrl(`/api/statements/${id}`),
 };

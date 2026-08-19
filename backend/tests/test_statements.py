@@ -306,6 +306,91 @@ def test_get_statement_pages_returns_persisted_pages(make_token) -> None:
     assert body["pages"][0]["text_blocks"][0]["text"] == "STARBUCKS"
 
 
+def test_get_statement_analysis_requires_auth() -> None:
+    response = client.get(f"/api/statements/{uuid.uuid4()}/analysis")
+    assert response.status_code == 401
+
+
+def test_get_statement_analysis_rejects_other_users_statement(make_token) -> None:
+    other_user_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="not-mine.pdf",
+        storage_path="somewhere/not-mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis=None,
+    )
+    _use_fake_db(FakeSession([other_user_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{other_user_statement.id}/analysis",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_statement_analysis_returns_null_when_not_yet_classified(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/analysis",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["document_analysis"] is None
+
+
+def test_get_statement_analysis_returns_persisted_analysis(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={
+            "document_type": "bank_statement",
+            "institution": "Chase",
+            "account_type": "checking",
+            "account_last4": "1234",
+            "currency": "USD",
+            "statement_start": "2026-07-01",
+            "statement_end": "2026-07-31",
+            "sections": [{"type": "transactions", "pages": [2, 3]}],
+        },
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/analysis",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()["document_analysis"]
+    assert body["document_type"] == "bank_statement"
+    assert body["institution"] == "Chase"
+    assert body["sections"][0]["pages"] == [2, 3]
+
+
 def test_delete_statement_rejects_other_users_statement(make_token) -> None:
     other_user_statement = Statement(
         id=uuid.uuid4(),

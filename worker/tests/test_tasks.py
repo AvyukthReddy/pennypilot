@@ -5,7 +5,45 @@ import httpx
 from reportlab.pdfgen import canvas
 
 import worker.tasks as tasks
+from worker.document_analysis import DocumentAnalysis
 from worker.models import StatementRow
+
+VALID_ANALYSIS = DocumentAnalysis(
+    document_type="bank_statement",
+    institution="Chase",
+    account_type="checking",
+    account_last4="1234",
+    currency="USD",
+    statement_start="2026-07-01",
+    statement_end="2026-07-31",
+    sections=[{"type": "transactions", "pages": [1]}],
+)
+
+
+class _FakeUnderstandingService:
+    """Stand-in for DocumentUnderstandingService — no real network call.
+    `calls` is a shared list so tests can assert whether it ran at all."""
+
+    def __init__(self, calls: list, result: DocumentAnalysis | None = None, error: Exception | None = None):
+        self._calls = calls
+        self._result = result
+        self._error = error
+
+    def analyze(self, document):
+        self._calls.append(document)
+        if self._error:
+            raise self._error
+        return self._result
+
+
+def _patch_understanding(monkeypatch, result=None, error=None):
+    calls: list = []
+    monkeypatch.setattr(
+        tasks,
+        "DocumentUnderstandingService",
+        lambda: _FakeUnderstandingService(calls, result=result, error=error),
+    )
+    return calls
 
 
 class FakeTaskSession:
@@ -76,6 +114,7 @@ def _make_blank_pdf(pages: int = 2) -> bytes:
 
 def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     statement = _make_statement("application/pdf")
+    calls = _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
 
     _run_task(monkeypatch, statement, _make_pdf(pages=3))
 
@@ -91,9 +130,24 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert first_page["text_blocks"]
     assert first_page["text_blocks"][0]["text"] == "07/14/2026 Coffee and pastries $5.75"
 
+    assert len(calls) == 1
+    assert statement.document_analysis["document_type"] == "bank_statement"
+    assert statement.document_analysis["institution"] == "Chase"
+
+
+def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, error=RuntimeError("model unreachable"))
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert statement.document_analysis is None
+
 
 def test_parse_statement_scanned_pdf_flagged_not_failed(monkeypatch) -> None:
     statement = _make_statement("application/pdf")
+    calls = _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
 
     _run_task(monkeypatch, statement, _make_blank_pdf(pages=2))
 
@@ -103,14 +157,21 @@ def test_parse_statement_scanned_pdf_flagged_not_failed(monkeypatch) -> None:
     assert statement.parse_error is None
     assert len(statement.pages) == 2
     assert statement.pages[0]["text_blocks"] == []
+    # Scanned/no-text documents skip understanding entirely — no point
+    # classifying a document with nothing extracted from it.
+    assert calls == []
+    assert statement.document_analysis is None
 
 
 def test_parse_statement_csv_happy_path(monkeypatch) -> None:
     statement = _make_statement("text/csv")
     csv_bytes = b"Date,Description,Amount\n07/14/2026,Coffee,-4.50\n"
+    calls = _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
 
     _run_task(monkeypatch, statement, csv_bytes)
 
+    assert calls == []
+    assert statement.document_analysis is None
     assert statement.status == "ingested"
     assert statement.page_count is None
     assert statement.parser_version == tasks.INGESTION_VERSION

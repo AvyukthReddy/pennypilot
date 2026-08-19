@@ -26,4 +26,5 @@ class Statement(Base):
     parser_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     needs_ocr: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     pages: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    document_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
