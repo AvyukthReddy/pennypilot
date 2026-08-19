@@ -18,3 +18,46 @@ export function TransactionRowSkeleton() {
     </li>
   );
 }
+
+export function ProfileFormSkeleton() {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-4">
+        <Skeleton className="h-16 w-16 shrink-0 rounded-full" />
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-3 w-56" />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Skeleton className="h-3 w-16" />
+        <Skeleton className="h-9 w-full" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col gap-1">
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col gap-1">
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      </div>
+
+      <Skeleton className="mt-2 h-9 w-32" />
+    </div>
+  );
+}
