@@ -9,7 +9,12 @@ from app.core.celery_client import enqueue_parse_statement
 from app.core.db import get_db
 from app.core.security import CurrentUser, get_current_user
 from app.models.statement import Statement
-from app.schemas.statement import StatementAnalysisRead, StatementPagesRead, StatementRead
+from app.schemas.statement import (
+    StatementAnalysisRead,
+    StatementPagesRead,
+    StatementRead,
+    StatementTransactionRegionsRead,
+)
 from app.services.storage import delete_statement, get_statement_view_url, upload_statement
 
 # Signed URL passed to the parse task: long enough to survive a queue backlog,
@@ -130,6 +135,24 @@ def get_statement_analysis(
 ) -> dict:
     statement = _get_owned_statement(statement_id, user, db)
     return {"statement_id": statement.id, "document_analysis": statement.document_analysis}
+
+
+@router.get(
+    "/api/statements/{statement_id}/transaction-regions",
+    response_model=StatementTransactionRegionsRead,
+)
+def get_statement_transaction_regions(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    regions = (
+        statement.transaction_regions["transaction_regions"]
+        if statement.transaction_regions
+        else None
+    )
+    return {"statement_id": statement.id, "transaction_regions": regions}
 
 
 @router.delete("/api/statements/{statement_id}")

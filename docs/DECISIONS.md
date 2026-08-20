@@ -4,6 +4,53 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-19 — Phase 4: transaction region detection
+
+Phase 3's `DocumentAnalysis.sections` already says *which pages* hold what (e.g.
+`{"type": "transactions", "pages": [2, 3, 4]}`). Phase 4 narrows further: for just
+those flagged pages, find the exact bounding box that holds the transaction table
+itself — excluding headers, footers, logos, and margins — before any real line-item
+extraction has to touch the page. New `worker/worker/transaction_regions.py`:
+`TransactionRegion` (`page: int`, `region: tuple[float, float, float, float]` —
+`[x0, y0, x1, y1]` in the same points-from-top-left space `Page`/`TextBlock`
+already use) and `TransactionRegionDetection` (`transaction_regions: list[...]`) —
+matches the user's spec exactly, closed schema, no arbitrary JSON.
+
+**Reuses Phase 3's pattern wholesale, no new provider work.** New
+`worker/worker/transaction_region_detection.py`'s
+`TransactionRegionDetectionService.detect(document, document_analysis) ->
+TransactionRegionDetection` takes an `AIProvider` (same config-driven
+`AI_BASE_URL`/`MODEL_API_KEY`/`AI_MODEL`, no code change to swap models), same
+prompt-JSON-plus-one-self-repair-retry approach, same best-effort/non-fatal
+philosophy (missing key, network error, or invalid JSON just leaves
+`transaction_regions` as `null`, never fails the statement). The markdown-fence
+stripper both services need was pulled out to `worker/worker/_ai_json.py` rather
+than duplicated a second time.
+
+**Depends on Phase 3's output, doesn't redo it.** Only pages already flagged
+`"transactions"` are examined — `_candidate_pages` filters `document.pages` down
+to that set before building the prompt, which is the actual "expensive extraction
+reduction" the user described: Phase 3 narrows pages, Phase 4 narrows further
+within them. Detection is skipped entirely (no LLM call made) when there's no
+`document_analysis` at all or no `"transactions"` section in it — nothing to
+narrow.
+
+**One LLM call per document, not per page**, and **feeds `text_blocks` with
+coordinates, not just `text`** — unlike Phase 3 (pure classification, layout
+doesn't matter), naming a bounding region is inherently coordinate-based, so the
+model needs to see where things sit on the flagged pages, batched into a single
+prompt/response covering all of them at once.
+
+**Persisted as `Statement.transaction_regions`** (nullable `JSONB`, migration
+`d4e5f6a7b8c9`), same pattern as `document_analysis`/`pages` — exposed via a new
+`GET /api/statements/{id}/transaction-regions` (same ownership check as `/pages`/
+`/analysis`) and shown as a compact page/region table on the existing
+`/statements/analysis` page, below the document-analysis summary.
+
+`worker/worker/tasks.py`'s TODO marker moved from `phase 4` to `phase 5` — the
+still-unbuilt transaction-line parser is the next (and now better-scoped) seam:
+it gets `document`, `document_analysis`, *and* `transaction_regions` to work with.
+
 ## 2026-08-19 — Phase 3: document understanding (AIProvider abstraction, Qwen2.5-VL-7B via Hugging Face by default, supersedes pydantic removal)
 
 Answers "what is this document?" — not a transaction extraction. New

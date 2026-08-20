@@ -67,3 +67,13 @@ class DocumentAnalysisRead(BaseModel):
 class StatementAnalysisRead(BaseModel):
     statement_id: uuid.UUID
     document_analysis: DocumentAnalysisRead | None
+
+
+class TransactionRegionRead(BaseModel):
+    page: int
+    region: tuple[float, float, float, float]
+
+
+class StatementTransactionRegionsRead(BaseModel):
+    statement_id: uuid.UUID
+    transaction_regions: list[TransactionRegionRead] | None

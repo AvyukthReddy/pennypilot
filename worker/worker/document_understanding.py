@@ -1,9 +1,9 @@
 import json
 import logging
-import re
 
 from pydantic import ValidationError
 
+from worker._ai_json import strip_markdown_fence
 from worker.ai_provider import AIProvider
 from worker.config import default_ai_provider_config
 from worker.document import Document
@@ -13,16 +13,10 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 2  # 1 initial + 1 self-repair retry
 
-_FENCE_PATTERN = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
-
 
 class DocumentUnderstandingError(Exception):
     """The model never returned a DocumentAnalysis-shaped response within
     MAX_ATTEMPTS."""
-
-
-def _strip_markdown_fence(text: str) -> str:
-    return _FENCE_PATTERN.sub("", text).strip()
 
 
 def _render_pages(document: Document) -> str:
@@ -82,7 +76,7 @@ class DocumentUnderstandingService:
             messages.append({"role": "assistant", "content": reply})
 
             try:
-                return DocumentAnalysis.model_validate_json(_strip_markdown_fence(reply))
+                return DocumentAnalysis.model_validate_json(strip_markdown_fence(reply))
             except ValidationError as exc:
                 last_error = str(exc)
                 logger.warning("document understanding: invalid response: %s", last_error)

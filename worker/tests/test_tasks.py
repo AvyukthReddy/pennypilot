@@ -7,6 +7,7 @@ from reportlab.pdfgen import canvas
 import worker.tasks as tasks
 from worker.document_analysis import DocumentAnalysis
 from worker.models import StatementRow
+from worker.transaction_regions import TransactionRegionDetection
 
 VALID_ANALYSIS = DocumentAnalysis(
     document_type="bank_statement",
@@ -17,6 +18,15 @@ VALID_ANALYSIS = DocumentAnalysis(
     statement_start="2026-07-01",
     statement_end="2026-07-31",
     sections=[{"type": "transactions", "pages": [1]}],
+)
+
+ANALYSIS_WITHOUT_TRANSACTIONS = DocumentAnalysis(
+    document_type="bank_statement",
+    sections=[{"type": "account_summary", "pages": [1]}],
+)
+
+VALID_REGIONS = TransactionRegionDetection(
+    transaction_regions=[{"page": 1, "region": [45, 180, 570, 730]}],
 )
 
 
@@ -42,6 +52,36 @@ def _patch_understanding(monkeypatch, result=None, error=None):
         tasks,
         "DocumentUnderstandingService",
         lambda: _FakeUnderstandingService(calls, result=result, error=error),
+    )
+    return calls
+
+
+class _FakeRegionDetectionService:
+    """Stand-in for TransactionRegionDetectionService — no real network call."""
+
+    def __init__(
+        self,
+        calls: list,
+        result: TransactionRegionDetection | None = None,
+        error: Exception | None = None,
+    ):
+        self._calls = calls
+        self._result = result
+        self._error = error
+
+    def detect(self, document, document_analysis):
+        self._calls.append((document, document_analysis))
+        if self._error:
+            raise self._error
+        return self._result
+
+
+def _patch_region_detection(monkeypatch, result=None, error=None):
+    calls: list = []
+    monkeypatch.setattr(
+        tasks,
+        "TransactionRegionDetectionService",
+        lambda: _FakeRegionDetectionService(calls, result=result, error=error),
     )
     return calls
 
@@ -115,6 +155,7 @@ def _make_blank_pdf(pages: int = 2) -> bytes:
 def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     statement = _make_statement("application/pdf")
     calls = _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    region_calls = _patch_region_detection(monkeypatch, result=VALID_REGIONS)
 
     _run_task(monkeypatch, statement, _make_pdf(pages=3))
 
@@ -134,6 +175,9 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert statement.document_analysis["document_type"] == "bank_statement"
     assert statement.document_analysis["institution"] == "Chase"
 
+    assert len(region_calls) == 1
+    assert statement.transaction_regions["transaction_regions"][0]["page"] == 1
+
 
 def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch) -> None:
     statement = _make_statement("application/pdf")
@@ -143,6 +187,33 @@ def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch
 
     assert statement.status == "ingested"
     assert statement.document_analysis is None
+    # No document_analysis at all ⇒ region detection is never even reached.
+    assert statement.transaction_regions is None
+
+
+def test_parse_statement_region_detection_failure_is_non_fatal(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, error=RuntimeError("model unreachable"))
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert statement.document_analysis is not None
+    assert statement.transaction_regions is None
+
+
+def test_parse_statement_skips_region_detection_without_transactions_section(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=ANALYSIS_WITHOUT_TRANSACTIONS)
+    region_calls = _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert statement.document_analysis is not None
+    assert region_calls == []
+    assert statement.transaction_regions is None
 
 
 def test_parse_statement_scanned_pdf_flagged_not_failed(monkeypatch) -> None:
