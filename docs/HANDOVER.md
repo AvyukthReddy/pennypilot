@@ -44,46 +44,58 @@ request-flow maps).
   `frontend/src/app/statements/` (`components/statements-list.tsx`), linked from the
   navbar. Uploads are deduplicated by SHA-256 (`Statement.file_hash`) — re-uploading
   the same file for the same user returns `409`.
-- **Statement ingestion, analysis, and understanding (Phase 1+2+3 — no transaction
-  parser)**: after upload, a Celery task (`worker.parse_statement`) downloads the
-  stored file unmodified, then for PDFs runs `worker/worker/pdf_analysis.py`'s
-  `analyze_pdf` (via `pdfplumber`) to produce a `Page` per page
-  (`worker/worker/document.py` — `width`/`height`/`text`/`text_blocks`/`images`) and
-  `is_scanned` to flag `needs_ocr` (a scanned/image-only PDF with no real text layer
-  — detection only, no OCR runs). When there's real extracted text,
-  `worker/worker/document_understanding.py`'s `DocumentUnderstandingService.analyze`
-  then classifies the document (bank/credit-card statement, institution, account,
-  currency, period, page-ranged sections) via Qwen2.5-VL-7B-Instruct over Hugging
-  Face's Inference Providers router (free tier), validated against the closed
-  `DocumentAnalysis` Pydantic schema (`worker/worker/document_analysis.py`) with
-  one self-repair retry on
-  invalid JSON — best-effort, never fails the statement.
-  `Statement.page_count`/`parser_version`/`needs_ocr`/`pages`/`document_analysis`
-  all get persisted (`pages`/`document_analysis` as `JSONB`, migrations
-  `b2e3d4f5a6c7`/`c3f4a5b6d7e8`), `status` becomes `"ingested"` (a scanned PDF, or
-  one the model failed to classify, still succeeds). No transaction-line parser
+- **Statement ingestion, analysis, understanding, and region detection
+  (Phase 1+2+3+4 — no transaction parser)**: after upload, a Celery task
+  (`worker.parse_statement`) downloads the stored file unmodified, then for PDFs
+  runs `worker/worker/pdf_analysis.py`'s `analyze_pdf` (via `pdfplumber`) to
+  produce a `Page` per page (`worker/worker/document.py` — `width`/`height`/
+  `text`/`text_blocks`/`images`) and `is_scanned` to flag `needs_ocr` (a
+  scanned/image-only PDF with no real text layer — detection only, no OCR runs).
+  When there's real extracted text, `worker/worker/document_understanding.py`'s
+  `DocumentUnderstandingService.analyze` then classifies the document
+  (bank/credit-card statement, institution, account, currency, period,
+  page-ranged sections) via Qwen2.5-VL-7B-Instruct over Hugging Face's Inference
+  Providers router (free tier), validated against the closed `DocumentAnalysis`
+  Pydantic schema (`worker/worker/document_analysis.py`) with one self-repair
+  retry on invalid JSON — best-effort, never fails the statement. When that
+  classification found a `"transactions"` section,
+  `worker/worker/transaction_region_detection.py`'s
+  `TransactionRegionDetectionService.detect` then narrows those specific pages
+  down to an exact `[x0, y0, x1, y1]` bounding region each — same `AIProvider`,
+  same retry/best-effort approach, validated against `TransactionRegionDetection`
+  (`worker/worker/transaction_regions.py`). `Statement.page_count`/
+  `parser_version`/`needs_ocr`/`pages`/`document_analysis`/`transaction_regions`
+  all get persisted (`pages`/`document_analysis`/`transaction_regions` as
+  `JSONB`, migrations `b2e3d4f5a6c7`/`c3f4a5b6d7e8`/`d4e5f6a7b8c9`), `status`
+  becomes `"ingested"` (a scanned PDF, one the model failed to classify, or one
+  where region detection failed, all still succeed). No transaction-line parser
   exists yet — earlier parsing-pipeline attempts were deleted entirely (never
-  committed, so no history to preserve). See [DECISIONS.md](DECISIONS.md)'s "Phase
-  3: document understanding", "Persist `Statement.pages`", "Phase 2: PDF document
-  analysis", and "Statement parsing scoped down to Phase 1" entries, and
-  `worker/worker/tasks.py`'s `# TODO(phase 4): hand document (+ document_analysis)
-to a real transaction-line parser here.` marker for exactly where the next parser
+  committed, so no history to preserve). See [DECISIONS.md](DECISIONS.md)'s
+  "Phase 4: transaction region detection", "Phase 3: document understanding",
+  "Persist `Statement.pages`", "Phase 2: PDF document analysis", and "Statement
+  parsing scoped down to Phase 1" entries, and `worker/worker/tasks.py`'s
+  `# TODO(phase 5): hand document (+ document_analysis + transaction_regions) to
+  a real transaction-line parser here.` marker for exactly where the next parser
   plugs in.
-- **Viewing extracted text blocks and document classification**:
-  `GET /api/statements/{id}/pages` and `GET /api/statements/{id}/analysis`
-  (`backend/app/api/statements.py`) return a statement's persisted `pages`/
-  `document_analysis` (same ownership check as `/view`). Frontend: a "Text blocks"
-  link per statement row (`components/statements-list.tsx`, shown for
-  `status === "ingested"` PDFs) opens `/statements/analysis`, which renders
+- **Viewing extracted text blocks, document classification, and detected
+  regions**:
+  `GET /api/statements/{id}/pages`, `GET /api/statements/{id}/analysis`, and
+  `GET /api/statements/{id}/transaction-regions` (`backend/app/api/statements.py`)
+  return a statement's persisted `pages`/`document_analysis`/`transaction_regions`
+  (same ownership check as `/view`). Frontend: a "Text blocks" link per statement
+  row (`components/statements-list.tsx`, shown for `status === "ingested"` PDFs)
+  opens `/statements/analysis`, which renders, top to bottom:
   `components/document-analysis-summary.tsx` (document type/institution/account/
-  currency/period + section list, or "Not yet classified") above
-  `components/statement-pages-view.tsx` (each page as a collapsible section with a
-  table of `text_blocks`). This is a debugging/inspection view, not part of the
-  intended end-user product surface — it exists so extraction/classification
-  quality can be checked against real statements before Phase 4 (a real transaction
-  parser) gets built on top of it.
+  currency/period + section list, or "Not yet classified"),
+  `components/transaction-regions-view.tsx` (page/region table, or an explanatory
+  empty state), then `components/statement-pages-view.tsx` (each page as a
+  collapsible section with a table of `text_blocks`). This is a debugging/
+  inspection view, not part of the intended end-user product surface — it exists
+  so extraction/classification/region quality can be checked against real
+  statements before Phase 5 (a real transaction parser) gets built on top of it.
 - **Worker**: `worker/` (Celery) has one task (`worker.parse_statement`,
-  `worker/worker/tasks.py`, ingestion + analysis + understanding) with its own DB
+  `worker/worker/tasks.py`, ingestion + analysis + understanding + region
+  detection) with its own DB
   access layer (`worker/worker/config.py`, `db.py`, `models.py` — hand-mirrored,
   non-authoritative mappings; Alembic in `backend/` remains the sole schema
   authority). Dependencies: `celery[redis]`, `sqlalchemy`, `psycopg`, `httpx`,
@@ -112,20 +124,22 @@ to a real transaction-line parser here.` marker for exactly where the next parse
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: Phase 3 document
-  understanding — `worker/worker/document_understanding.py`'s
-  `DocumentUnderstandingService` classifies statements via an `AIProvider`
-  (`worker/worker/ai_provider.py`, config-driven `AI_BASE_URL`/`MODEL_API_KEY`/
-  `AI_MODEL` — no model/provider hard-coded in the pipeline), defaulting to
-  Qwen2.5-VL-7B-Instruct over Hugging Face's Inference Providers router (free
-  tier, `featherless-ai` provider), validated against the closed
-  `DocumentAnalysis` schema; persisted on `Statement.document_analysis` (`JSONB`)
-  and viewable via a new `GET /api/statements/{id}/analysis` + a summary card on
-  the `/statements/analysis` page. Best-effort — never fails ingestion. Requires
+- Nothing currently in flight. Last completed unit of work: Phase 4 transaction
+  region detection — `worker/worker/transaction_region_detection.py`'s
+  `TransactionRegionDetectionService` narrows the pages Phase 3 flagged
+  `"transactions"` down to an exact `[x0, y0, x1, y1]` region each, using the
+  same `AIProvider` (`worker/worker/ai_provider.py`, config-driven
+  `AI_BASE_URL`/`MODEL_API_KEY`/`AI_MODEL` — no model/provider hard-coded in
+  either pipeline) and the same self-repair-retry/best-effort approach as Phase
+  3's `DocumentUnderstandingService`; persisted on
+  `Statement.transaction_regions` (`JSONB`) and viewable via a new
+  `GET /api/statements/{id}/transaction-regions` + a table on the
+  `/statements/analysis` page. Best-effort — never fails ingestion, and skipped
+  entirely when there's no `"transactions"` section to narrow. Requires
   `MODEL_API_KEY` set (optional; skipped with a logged warning if unset). No
   OCR/vision and no transaction-line extraction yet — see
-  [DECISIONS.md](DECISIONS.md)'s 2026-08-19 entries. Backend (39 tests) and worker
-  (13 tests) pass.
+  [DECISIONS.md](DECISIONS.md)'s 2026-08-19 entries. Backend (43 tests) and
+  worker (21 tests) pass.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not
   actually been run. Do that before relying on the containerized stack. (The
@@ -140,20 +154,24 @@ to a real transaction-line parser here.` marker for exactly where the next parse
   done.
 - **No transaction-line parser exists.** Every ingested statement lands at
   `status="ingested"` with an empty `transactions` table behind it — this is the
-  current, intended state of Phase 1+2+3, not a bug. The Transactions page/API work
-  correctly, they just have nothing to show until Phase 4 (a real parser) exists.
+  current, intended state of Phase 1+2+3+4, not a bug. The Transactions page/API
+  work correctly, they just have nothing to show until Phase 5 (a real parser)
+  exists.
 - **No OCR/vision exists.** `Statement.needs_ocr` gets set for scanned/image-only
   PDFs, but nothing acts on it yet — flagged only, not processed. Document
-  understanding is skipped entirely for these too (see above).
-- **Document understanding needs `MODEL_API_KEY`.** Without it, every PDF statement
-  ingests fine but `document_analysis` stays `null` forever (a logged warning, not
-  a crash). With the default provider (Hugging Face), get a free token at
+  understanding and transaction region detection are both skipped entirely for
+  these too (see above).
+- **Document understanding and region detection both need `MODEL_API_KEY`.**
+  Without it, every PDF statement ingests fine but `document_analysis`/
+  `transaction_regions` stay `null` forever (a logged warning, not a crash).
+  With the default provider (Hugging Face), get a free token at
   hf.co/settings/tokens (with "Make calls to Inference Providers" permission) and
   set it as `MODEL_API_KEY` in `.env`. To benchmark or swap models, change
   `AI_BASE_URL`/`AI_MODEL` (and `MODEL_API_KEY` if the provider differs) — no code
-  change needed, see `worker/worker/ai_provider.py`. Also worth knowing: the
-  default is a free-tier 7B model, not a frontier one — expect it to occasionally
-  misclassify unusual statement formats or leave fields `null`.
+  change needed, see `worker/worker/ai_provider.py` (both AI services share it).
+  Also worth knowing: the default is a free-tier 7B model, not a frontier one —
+  expect it to occasionally misclassify unusual statement formats, leave fields
+  `null`, or return an imprecise region.
 - **`REDIS_URL` in `.env` (`redis://redis:6379/0`) is a Docker Compose service
   hostname — it only resolves inside Docker's network.** Running the backend or the
   Celery worker locally (outside Docker, e.g. `uvicorn --reload` / `poetry run celery`
@@ -176,16 +194,18 @@ to a real transaction-line parser here.` marker for exactly where the next parse
 
 ## Next up
 
-- Phase 4: build a real transaction-line parser that consumes the `Document` object
-  (`worker/worker/document.py`) _and_ its `DocumentAnalysis` classification
-  (`worker/worker/document_analysis.py` — which pages hold `transactions` sections)
-  and produces `transactions` rows — the seam is marked with a
-  `# TODO(phase 4)` comment in `worker/worker/tasks.py`. Not yet scoped/agreed how
+- Phase 5: build a real transaction-line parser that consumes the `Document`
+  object (`worker/worker/document.py`), its `DocumentAnalysis` classification
+  (`worker/worker/document_analysis.py` — which pages hold `transactions`
+  sections), _and_ its `TransactionRegionDetection` bounding boxes
+  (`worker/worker/transaction_regions.py` — exactly where on each of those pages
+  to look) and produces `transactions` rows — the seam is marked with a
+  `# TODO(phase 5)` comment in `worker/worker/tasks.py`. Not yet scoped/agreed how
   (deterministic vs. LLM-assisted, bank-specific vs. generic) — discuss with the
   user before starting.
 - OCR/vision for scanned PDFs (`Statement.needs_ocr=true`) — detection exists,
-  nothing consumes the flag yet, and document understanding is skipped for these
-  too. Also not yet scoped (which OCR engine/vision API, whether it produces the
-  same `Page`/`text_blocks` shape or something else).
+  nothing consumes the flag yet, and document understanding/region detection are
+  both skipped for these too. Also not yet scoped (which OCR engine/vision API,
+  whether it produces the same `Page`/`text_blocks` shape or something else).
 - Run the Docker build once Docker Desktop is available (see "In progress" above) —
   note the worker image will need to build `pydantic`/`openai` now too.

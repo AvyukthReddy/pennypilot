@@ -391,6 +391,87 @@ def test_get_statement_analysis_returns_persisted_analysis(make_token) -> None:
     assert body["sections"][0]["pages"] == [2, 3]
 
 
+def test_get_statement_transaction_regions_requires_auth() -> None:
+    response = client.get(f"/api/statements/{uuid.uuid4()}/transaction-regions")
+    assert response.status_code == 401
+
+
+def test_get_statement_transaction_regions_rejects_other_users_statement(make_token) -> None:
+    other_user_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="not-mine.pdf",
+        storage_path="somewhere/not-mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        transaction_regions=None,
+    )
+    _use_fake_db(FakeSession([other_user_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{other_user_statement.id}/transaction-regions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_statement_transaction_regions_returns_null_when_not_yet_detected(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        transaction_regions=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/transaction-regions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["transaction_regions"] is None
+
+
+def test_get_statement_transaction_regions_returns_persisted_regions(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        transaction_regions={
+            "transaction_regions": [
+                {"page": 2, "region": [45, 180, 570, 730]},
+                {"page": 3, "region": [45, 90, 570, 730]},
+            ]
+        },
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/transaction-regions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    regions = response.json()["transaction_regions"]
+    assert len(regions) == 2
+    assert regions[0]["page"] == 2
+    assert regions[0]["region"] == [45, 180, 570, 730]
+
+
 def test_delete_statement_rejects_other_users_statement(make_token) -> None:
     other_user_statement = Statement(
         id=uuid.uuid4(),

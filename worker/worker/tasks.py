@@ -11,6 +11,8 @@ from worker.document_analysis import DocumentAnalysis
 from worker.document_understanding import DocumentUnderstandingService
 from worker.models import StatementRow
 from worker.pdf_analysis import analyze_pdf, is_scanned
+from worker.transaction_region_detection import TransactionRegionDetectionService
+from worker.transaction_regions import TransactionRegionDetection
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +30,15 @@ def ping() -> str:
 
 @app.task(name="worker.parse_statement")
 def parse_statement(statement_id: str, signed_url: str) -> None:
-    """Phase 1+2+3: document ingestion, analysis, and understanding. Downloads
-    the stored file exactly as uploaded (never modified), analyzes PDFs
-    page-by-page (size, text, positioned text blocks, image regions), flags
-    scanned/image-only documents, then classifies what the document is
-    (bank/credit-card statement, institution, period, sections) via
-    DocumentUnderstandingService. No transaction-line parser exists yet;
-    status lands on "ingested", not "parsed"."""
+    """Phase 1+2+3+4: document ingestion, analysis, understanding, and
+    transaction-region detection. Downloads the stored file exactly as
+    uploaded (never modified), analyzes PDFs page-by-page (size, text,
+    positioned text blocks, image regions), flags scanned/image-only
+    documents, classifies what the document is (bank/credit-card statement,
+    institution, period, sections) via DocumentUnderstandingService, then
+    narrows the pages flagged "transactions" down to an exact bounding region
+    per page via TransactionRegionDetectionService. No transaction-line parser
+    exists yet; status lands on "ingested", not "parsed"."""
     session = SessionLocal()
     try:
         stmt = session.get(StatementRow, uuid.UUID(statement_id))
@@ -101,8 +105,27 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                 logger.warning(
                     "statement %s: document understanding failed", statement_id, exc_info=True
                 )
-        # TODO(phase 4): hand `document` (+ document_analysis) to a real
-        # transaction-line parser here.
+        # Same best-effort philosophy as document understanding above — a
+        # failure here must not fail the statement, only leave it without
+        # detected regions. Nothing to narrow if Phase 3 found no
+        # "transactions" section (includes the needs_ocr/no-document_analysis
+        # cases, inherited since those already skip document understanding).
+        transaction_regions: TransactionRegionDetection | None = None
+        if document_analysis and any(
+            section.type == "transactions" for section in document_analysis.sections
+        ):
+            try:
+                transaction_regions = TransactionRegionDetectionService().detect(
+                    document, document_analysis
+                )
+            except Exception:
+                logger.warning(
+                    "statement %s: transaction region detection failed",
+                    statement_id,
+                    exc_info=True,
+                )
+        # TODO(phase 5): hand `document` (+ document_analysis +
+        # transaction_regions) to a real transaction-line parser here.
 
         stmt.page_count = page_count
         stmt.parser_version = INGESTION_VERSION
@@ -110,6 +133,9 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         stmt.pages = [asdict(page) for page in pages]
         stmt.document_analysis = (
             document_analysis.model_dump(mode="json") if document_analysis else None
+        )
+        stmt.transaction_regions = (
+            transaction_regions.model_dump(mode="json") if transaction_regions else None
         )
         stmt.status = "ingested"
         session.commit()
