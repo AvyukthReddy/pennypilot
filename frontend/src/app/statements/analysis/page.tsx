@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { DocumentAnalysisSummary } from "@/components/document-analysis-summary";
 import { Navbar } from "@/components/navbar";
 import { StatementPagesView } from "@/components/statement-pages-view";
+import { StatementViewButton } from "@/components/statement-view-button";
 import { TransactionRegionsView } from "@/components/transaction-regions-view";
 import { createClient } from "@/lib/supabase/server";
 
@@ -36,13 +37,16 @@ export default async function StatementAnalysisPage({
       <Navbar email={user.email ?? ""} />
 
       <div className="mx-auto flex max-w-4xl flex-col gap-10 px-4 py-16">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-black dark:text-zinc-50">
-            Document analysis
-          </h1>
-          {filename && (
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{filename}</p>
-          )}
+        <div className="flex flex-row items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight text-black dark:text-zinc-50">
+              Document analysis
+            </h1>
+            {filename && (
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{filename}</p>
+            )}
+          </div>
+          <StatementViewButton statementId={statementId} />
         </div>
 
         <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
