@@ -55,8 +55,11 @@ def _system_prompt() -> str:
         "For each page, find the single bounding region that contains the "
         "transaction table itself — excluding page headers, footers, logos, "
         "and margins. Use the same coordinate space you were given.\n\n"
-        "Respond with ONLY a single JSON object matching this schema — no "
-        "markdown fences, no commentary, no extra text:\n\n"
+        "This is the JSON Schema your response must conform to — it describes "
+        "the shape of the answer, it is NOT the answer itself. Respond with "
+        "ONLY a JSON object that is a valid *instance* of this schema (actual "
+        "values, not the schema's own \"$defs\"/\"properties\"/\"type\" "
+        "keywords), no markdown fences, no commentary, no extra text:\n\n"
         f"{schema}\n\n"
         "Include exactly one region per page you were shown."
     )

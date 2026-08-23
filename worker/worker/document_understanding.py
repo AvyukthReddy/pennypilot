@@ -31,8 +31,11 @@ def _system_prompt() -> str:
         "You are classifying a financial statement document. Given the text of "
         "each page, determine what kind of document it is and identify its "
         "sections.\n\n"
-        "Respond with ONLY a single JSON object matching this schema — no "
-        "markdown fences, no commentary, no extra text:\n\n"
+        "This is the JSON Schema your response must conform to — it describes "
+        "the shape of the answer, it is NOT the answer itself. Respond with "
+        "ONLY a JSON object that is a valid *instance* of this schema (actual "
+        "values, not the schema's own \"$defs\"/\"properties\"/\"type\" "
+        "keywords), no markdown fences, no commentary, no extra text:\n\n"
         f"{schema}\n\n"
         'If a field can\'t be determined from the text, use null (or "unknown" '
         "for document_type). `sections` should cover the pages you were shown, "

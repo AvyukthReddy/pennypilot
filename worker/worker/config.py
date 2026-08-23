@@ -18,16 +18,18 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 # Document understanding — all provider-specific. Swapping models or providers
 # (to benchmark, or because a free tier changed) is an env change only, never a
 # code change in worker/worker/document_understanding.py or
-# transaction_region_detection.py. Defaults point at Hugging Face's Inference
-# Providers router with Qwen2.5-VL-7B-Instruct, served by the "fal" provider —
-# featherless-ai (the first one tried) started returning 503 capacity_exhausted
-# under normal use; fal is what's confirmed working today. Override any of the
-# three independently.
-AI_BASE_URL = os.environ.get("AI_BASE_URL", "https://router.huggingface.co/v1")
-# Falls back to HF_TOKEN for now, since Hugging Face is the default provider and
-# that's the token name their own docs/CLI use — set MODEL_API_KEY explicitly once
-# you're pointing at a different provider.
-MODEL_API_KEY = os.environ.get("MODEL_API_KEY") or os.environ.get("HF_TOKEN") or None
+# transaction_region_detection.py. MODEL_PROVIDER picks which pair of
+# <PROVIDER>_BASE_URL/<PROVIDER>_API_KEY vars to read; unset or unrecognized
+# falls back to Hugging Face, since that's the confirmed-working default.
+MODEL_PROVIDER = os.environ.get("MODEL_PROVIDER", "HUGGINGFACE").upper()
+
+if MODEL_PROVIDER == "OPENROUTER":
+    AI_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    MODEL_API_KEY = os.environ.get("OPENROUTER_API_KEY") or None
+else:  # "HUGGINGFACE" or anything unrecognized
+    AI_BASE_URL = os.environ.get("HUGGINGFACE_BASE_URL", "https://router.huggingface.co/v1")
+    MODEL_API_KEY = os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN") or None
+
 AI_MODEL = os.environ.get("AI_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct:fal")
 
 
