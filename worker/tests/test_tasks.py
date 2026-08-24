@@ -8,6 +8,7 @@ import worker.tasks as tasks
 from worker.document_analysis import DocumentAnalysis
 from worker.models import StatementRow
 from worker.transaction_regions import TransactionRegionDetection
+from worker.transaction_schema import TransactionSchemaDiscovery
 
 VALID_ANALYSIS = DocumentAnalysis(
     document_type="bank_statement",
@@ -27,6 +28,16 @@ ANALYSIS_WITHOUT_TRANSACTIONS = DocumentAnalysis(
 
 VALID_REGIONS = TransactionRegionDetection(
     transaction_regions=[{"page": 1, "region": [45, 180, 570, 730]}],
+)
+
+EMPTY_REGIONS = TransactionRegionDetection(transaction_regions=[])
+
+VALID_SCHEMA = TransactionSchemaDiscovery(
+    transaction_fields={
+        "transaction_date": {"source": "column_1"},
+        "description": {"source": "column_2"},
+        "amount": [{"source": "column_3"}],
+    },
 )
 
 
@@ -82,6 +93,36 @@ def _patch_region_detection(monkeypatch, result=None, error=None):
         tasks,
         "TransactionRegionDetectionService",
         lambda: _FakeRegionDetectionService(calls, result=result, error=error),
+    )
+    return calls
+
+
+class _FakeSchemaDiscoveryService:
+    """Stand-in for TransactionSchemaDiscoveryService — no real network call."""
+
+    def __init__(
+        self,
+        calls: list,
+        result: TransactionSchemaDiscovery | None = None,
+        error: Exception | None = None,
+    ):
+        self._calls = calls
+        self._result = result
+        self._error = error
+
+    def discover(self, document, transaction_regions):
+        self._calls.append((document, transaction_regions))
+        if self._error:
+            raise self._error
+        return self._result
+
+
+def _patch_schema_discovery(monkeypatch, result=None, error=None):
+    calls: list = []
+    monkeypatch.setattr(
+        tasks,
+        "TransactionSchemaDiscoveryService",
+        lambda: _FakeSchemaDiscoveryService(calls, result=result, error=error),
     )
     return calls
 
@@ -156,6 +197,7 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     statement = _make_statement("application/pdf")
     calls = _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
     region_calls = _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    schema_calls = _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
 
     _run_task(monkeypatch, statement, _make_pdf(pages=3))
 
@@ -178,6 +220,12 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert len(region_calls) == 1
     assert statement.transaction_regions["transaction_regions"][0]["page"] == 1
 
+    assert len(schema_calls) == 1
+    assert (
+        statement.transaction_schema["transaction_fields"]["transaction_date"]["source"]
+        == "column_1"
+    )
+
 
 def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch) -> None:
     statement = _make_statement("application/pdf")
@@ -189,6 +237,7 @@ def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch
     assert statement.document_analysis is None
     # No document_analysis at all ⇒ region detection is never even reached.
     assert statement.transaction_regions is None
+    assert statement.transaction_schema is None
 
 
 def test_parse_statement_region_detection_failure_is_non_fatal(monkeypatch) -> None:
@@ -201,6 +250,8 @@ def test_parse_statement_region_detection_failure_is_non_fatal(monkeypatch) -> N
     assert statement.status == "ingested"
     assert statement.document_analysis is not None
     assert statement.transaction_regions is None
+    # No transaction_regions at all ⇒ schema discovery is never reached.
+    assert statement.transaction_schema is None
 
 
 def test_parse_statement_skips_region_detection_without_transactions_section(monkeypatch) -> None:
@@ -214,6 +265,34 @@ def test_parse_statement_skips_region_detection_without_transactions_section(mon
     assert statement.document_analysis is not None
     assert region_calls == []
     assert statement.transaction_regions is None
+    assert statement.transaction_schema is None
+
+
+def test_parse_statement_schema_discovery_failure_is_non_fatal(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, error=RuntimeError("model unreachable"))
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert statement.transaction_regions is not None
+    assert statement.transaction_schema is None
+
+
+def test_parse_statement_skips_schema_discovery_without_regions(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=EMPTY_REGIONS)
+    schema_calls = _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert statement.transaction_regions == {"transaction_regions": []}
+    assert schema_calls == []
+    assert statement.transaction_schema is None
 
 
 def test_parse_statement_scanned_pdf_flagged_not_failed(monkeypatch) -> None:
@@ -232,6 +311,8 @@ def test_parse_statement_scanned_pdf_flagged_not_failed(monkeypatch) -> None:
     # classifying a document with nothing extracted from it.
     assert calls == []
     assert statement.document_analysis is None
+    assert statement.transaction_regions is None
+    assert statement.transaction_schema is None
 
 
 def test_parse_statement_csv_happy_path(monkeypatch) -> None:
@@ -243,6 +324,8 @@ def test_parse_statement_csv_happy_path(monkeypatch) -> None:
 
     assert calls == []
     assert statement.document_analysis is None
+    assert statement.transaction_regions is None
+    assert statement.transaction_schema is None
     assert statement.status == "ingested"
     assert statement.page_count is None
     assert statement.parser_version == tasks.INGESTION_VERSION

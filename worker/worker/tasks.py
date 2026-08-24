@@ -13,6 +13,8 @@ from worker.models import StatementRow
 from worker.pdf_analysis import analyze_pdf, is_scanned
 from worker.transaction_region_detection import TransactionRegionDetectionService
 from worker.transaction_regions import TransactionRegionDetection
+from worker.transaction_schema import TransactionSchemaDiscovery
+from worker.transaction_schema_discovery import TransactionSchemaDiscoveryService
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +32,17 @@ def ping() -> str:
 
 @app.task(name="worker.parse_statement")
 def parse_statement(statement_id: str, signed_url: str) -> None:
-    """Phase 1+2+3+4: document ingestion, analysis, understanding, and
-    transaction-region detection. Downloads the stored file exactly as
-    uploaded (never modified), analyzes PDFs page-by-page (size, text,
-    positioned text blocks, image regions), flags scanned/image-only
-    documents, classifies what the document is (bank/credit-card statement,
-    institution, period, sections) via DocumentUnderstandingService, then
-    narrows the pages flagged "transactions" down to an exact bounding region
-    per page via TransactionRegionDetectionService. No transaction-line parser
+    """Phase 1+2+3+4+5: document ingestion, analysis, understanding,
+    transaction-region detection, and transaction-schema discovery. Downloads
+    the stored file exactly as uploaded (never modified), analyzes PDFs
+    page-by-page (size, text, positioned text blocks, image regions), flags
+    scanned/image-only documents, classifies what the document is
+    (bank/credit-card statement, institution, period, sections) via
+    DocumentUnderstandingService, narrows the pages flagged "transactions"
+    down to an exact bounding region per page via
+    TransactionRegionDetectionService, then figures out what a transaction
+    record actually looks like in this document (which columns map to which
+    fields) via TransactionSchemaDiscoveryService. No transaction-line parser
     exists yet; status lands on "ingested", not "parsed"."""
     session = SessionLocal()
     try:
@@ -124,8 +129,24 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                     statement_id,
                     exc_info=True,
                 )
-        # TODO(phase 5): hand `document` (+ document_analysis +
-        # transaction_regions) to a real transaction-line parser here.
+        # Same best-effort philosophy again — a failure here must not fail
+        # the statement, only leave it without a discovered schema. Nothing
+        # to map if Phase 4 found no regions to narrow to.
+        transaction_schema: TransactionSchemaDiscovery | None = None
+        if transaction_regions and transaction_regions.transaction_regions:
+            try:
+                transaction_schema = TransactionSchemaDiscoveryService().discover(
+                    document, transaction_regions
+                )
+            except Exception:
+                logger.warning(
+                    "statement %s: transaction schema discovery failed",
+                    statement_id,
+                    exc_info=True,
+                )
+        # TODO(phase 6): hand `document` (+ document_analysis +
+        # transaction_regions + transaction_schema) to a real transaction-line
+        # parser here.
 
         stmt.page_count = page_count
         stmt.parser_version = INGESTION_VERSION
@@ -136,6 +157,9 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         )
         stmt.transaction_regions = (
             transaction_regions.model_dump(mode="json") if transaction_regions else None
+        )
+        stmt.transaction_schema = (
+            transaction_schema.model_dump(mode="json") if transaction_schema else None
         )
         stmt.status = "ingested"
         session.commit()

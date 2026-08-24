@@ -6,6 +6,7 @@ import { Navbar } from "@/components/navbar";
 import { StatementPagesView } from "@/components/statement-pages-view";
 import { StatementViewButton } from "@/components/statement-view-button";
 import { TransactionRegionsView } from "@/components/transaction-regions-view";
+import { TransactionSchemaView } from "@/components/transaction-schema-view";
 import { createClient } from "@/lib/supabase/server";
 
 type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
@@ -58,6 +59,13 @@ export default async function StatementAnalysisPage({
             Transaction regions
           </h2>
           <TransactionRegionsView statementId={statementId} />
+        </section>
+
+        <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
+          <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
+            Transaction schema
+          </h2>
+          <TransactionSchemaView statementId={statementId} />
         </section>
 
         <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
