@@ -20,6 +20,8 @@ type DocumentAnalysis = {
   currency: string | null;
   statement_start: string | null;
   statement_end: string | null;
+  beginning_balance: string | null;
+  ending_balance: string | null;
   sections: DocumentSection[];
 };
 
@@ -155,6 +157,18 @@ export function DocumentAnalysisSummary({ statementId }: { statementId: string }
           <>
             <dt className="text-zinc-500 dark:text-zinc-400">Period</dt>
             <dd className="text-black dark:text-zinc-50">{period}</dd>
+          </>
+        )}
+        {analysis.beginning_balance && (
+          <>
+            <dt className="text-zinc-500 dark:text-zinc-400">Beginning balance</dt>
+            <dd className="text-black dark:text-zinc-50">{analysis.beginning_balance}</dd>
+          </>
+        )}
+        {analysis.ending_balance && (
+          <>
+            <dt className="text-zinc-500 dark:text-zinc-400">Ending balance</dt>
+            <dd className="text-black dark:text-zinc-50">{analysis.ending_balance}</dd>
           </>
         )}
       </dl>

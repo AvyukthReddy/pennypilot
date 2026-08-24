@@ -39,7 +39,10 @@ def _system_prompt() -> str:
         f"{schema}\n\n"
         'If a field can\'t be determined from the text, use null (or "unknown" '
         "for document_type). `sections` should cover the pages you were shown, "
-        "grouped by what kind of content they contain."
+        "grouped by what kind of content they contain. If an account summary "
+        "states a beginning and/or ending balance for the statement period, "
+        "extract those too as beginning_balance/ending_balance — null if no "
+        "balance summary is visible."
     )
 
 

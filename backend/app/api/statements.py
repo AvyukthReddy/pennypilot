@@ -11,6 +11,7 @@ from app.core.security import CurrentUser, get_current_user
 from app.models.statement import Statement
 from app.schemas.statement import (
     StatementAnalysisRead,
+    StatementFinancialValidationRead,
     StatementPagesRead,
     StatementRead,
     StatementTransactionRegionsRead,
@@ -190,6 +191,25 @@ def get_statement_transaction_verification(
         "statement_id": statement.id,
         "valid": verification["valid"] if verification else None,
         "issues": verification["issues"] if verification else [],
+    }
+
+
+@router.get(
+    "/api/statements/{statement_id}/financial-validation",
+    response_model=StatementFinancialValidationRead,
+)
+def get_statement_financial_validation(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    validation = statement.financial_validation
+    return {
+        "statement_id": statement.id,
+        "valid": validation["valid"] if validation else None,
+        "issues": validation["issues"] if validation else [],
+        "balance_check": validation["balance_check"] if validation else None,
     }
 
 

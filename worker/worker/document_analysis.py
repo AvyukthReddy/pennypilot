@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel
@@ -30,4 +31,6 @@ class DocumentAnalysis(BaseModel):
     currency: str | None = None
     statement_start: date | None = None
     statement_end: date | None = None
+    beginning_balance: Decimal | None = None
+    ending_balance: Decimal | None = None
     sections: list[DocumentSection] = []

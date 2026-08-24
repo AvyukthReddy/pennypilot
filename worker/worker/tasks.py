@@ -9,6 +9,7 @@ from worker.db import SessionLocal
 from worker.document import Document, Page
 from worker.document_analysis import DocumentAnalysis
 from worker.document_understanding import DocumentUnderstandingService
+from worker.financial_validation import validate_transactions
 from worker.models import StatementRow, TransactionRow
 from worker.pdf_analysis import analyze_pdf, is_scanned
 from worker.transaction_extraction import TransactionExtractionService
@@ -35,22 +36,25 @@ def ping() -> str:
 
 @app.task(name="worker.parse_statement")
 def parse_statement(statement_id: str, signed_url: str) -> None:
-    """Phase 1+2+3+4+5+6+7: document ingestion, analysis, understanding,
+    """Phase 1+2+3+4+5+6+7+8: document ingestion, analysis, understanding,
     transaction-region detection, transaction-schema discovery, transaction
-    extraction, and transaction verification. Downloads the stored file
-    exactly as uploaded (never modified), analyzes PDFs page-by-page (size,
-    text, positioned text blocks, image regions), flags scanned/image-only
-    documents, classifies what the document is (bank/credit-card statement,
-    institution, period, sections) via DocumentUnderstandingService, narrows
-    the pages flagged "transactions" down to an exact bounding region per
-    page via TransactionRegionDetectionService, figures out what a
-    transaction record actually looks like in this document (which columns
-    map to which fields) via TransactionSchemaDiscoveryService, extracts
-    every transaction row region-by-region via TransactionExtractionService,
-    checks each region's extraction against the region itself via
-    TransactionVerificationService (re-extracting once with the found issues
-    as correction feedback when invalid), then inserts the final rows into
-    the transactions table."""
+    extraction, transaction verification, and deterministic financial
+    validation. Downloads the stored file exactly as uploaded (never
+    modified), analyzes PDFs page-by-page (size, text, positioned text
+    blocks, image regions), flags scanned/image-only documents, classifies
+    what the document is (bank/credit-card statement, institution, period,
+    sections, beginning/ending balance) via DocumentUnderstandingService,
+    narrows the pages flagged "transactions" down to an exact bounding
+    region per page via TransactionRegionDetectionService, figures out what
+    a transaction record actually looks like in this document (which
+    columns map to which fields) via TransactionSchemaDiscoveryService,
+    extracts every transaction row region-by-region via
+    TransactionExtractionService, checks each region's extraction against
+    the region itself via TransactionVerificationService (re-extracting
+    once with the found issues as correction feedback when invalid), then
+    inserts the final rows into the transactions table and runs a plain
+    Python (non-AI) reconciliation pass over them via
+    validate_transactions."""
     session = SessionLocal()
     try:
         stmt = session.get(StatementRow, uuid.UUID(statement_id))
@@ -227,6 +231,19 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                         )
                     )
 
+        # Pure Python, no AI call — checks the final (possibly Phase-7-
+        # corrected) transaction list for date/amount sanity, duplicates,
+        # and (when the statement states one) balance reconciliation.
+        # Purely diagnostic: never blocks persistence, never touches status.
+        financial_validation = None
+        if extracted_rows:
+            try:
+                financial_validation = validate_transactions(document_analysis, extracted_rows)
+            except Exception:
+                logger.warning(
+                    "statement %s: financial validation failed", statement_id, exc_info=True
+                )
+
         stmt.page_count = page_count
         stmt.parser_version = INGESTION_VERSION
         stmt.needs_ocr = needs_ocr
@@ -250,6 +267,9 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
             ).model_dump(mode="json")
             if verification_reports
             else None
+        )
+        stmt.financial_validation = (
+            financial_validation.model_dump(mode="json") if financial_validation else None
         )
         stmt.status = "ingested"
         session.add_all(extracted_rows)

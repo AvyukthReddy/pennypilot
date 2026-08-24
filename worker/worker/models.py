@@ -34,6 +34,7 @@ class StatementRow(Base):
     transaction_regions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     transaction_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     transaction_verification: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    financial_validation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class TransactionRow(Base):

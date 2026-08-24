@@ -80,13 +80,14 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `processing`, and renders `parse_error` under the status line once parsing
    finishes (or fails/warns) — see "Statement parsing" below.
 
-## Statement ingestion, analysis, understanding, region detection, schema discovery, transaction extraction, and verification (upload → Document → transactions, Phase 1+2+3+4+5+6+7)
+## Statement ingestion, analysis, understanding, region detection, schema discovery, transaction extraction, verification, and financial validation (upload → Document → transactions, Phase 1+2+3+4+5+6+7+8)
 
 Earlier parsing-pipeline attempts (`worker/worker/parsing/`) were deleted entirely —
 never committed, so no history to preserve. See `docs/DECISIONS.md`'s "Statement
 parsing scoped down to Phase 1" entry. This covers ingestion, page/text extraction,
 document-level classification, narrowing to transaction-table regions, discovering
-each region's column layout, and finally extracting every transaction row.
+each region's column layout, extracting and AI-verifying every transaction row, and
+finally a deterministic (non-AI) arithmetic/sanity pass over the result.
 
 1. In `upload_statement_file` (`backend/app/api/statements.py`), right after the
    `Statement` row is created: a SHA-256 `file_hash` of the uploaded bytes is checked
@@ -140,7 +141,8 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
    Providers router serving Qwen2.5-VL-7B-Instruct) and validates the reply against
    the closed `DocumentAnalysis` Pydantic schema (`worker/worker/document_analysis.py`)
    — document type, institution, account type/last4, currency, statement period,
-   and page-ranged `sections`. Invalid JSON triggers one self-repair retry before
+   beginning/ending balance (when a balance summary is visible), and page-ranged
+   `sections`. Invalid JSON triggers one self-repair retry before
    giving up. This step is **best-effort**: any failure (missing `MODEL_API_KEY`,
    network error, model never returns valid JSON) is caught, logged, and leaves
    `Statement.document_analysis` as `null` —
@@ -235,8 +237,24 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
     into `Statement.transaction_verification` (`JSONB`, migration
     `f6a7b8c9d0e1`) in the same `session.commit()` as everything else. See
     `docs/DECISIONS.md`'s 2026-08-24 "Phase 7" entry.
+12. Once the region loop finishes, if any rows were extracted,
+    `worker/worker/financial_validation.py`'s `validate_transactions`
+    (a plain Python function — no AI call, no provider, nothing to mock)
+    runs once over the *entire* final `extracted_rows` list: date sanity
+    (`post_date` before `transaction_date`, implausible years, dates outside
+    the statement period), amount sanity (zero, or more than 2 decimal
+    places), duplicate `(transaction_date, description, amount)` tuples, and
+    — only when `document_analysis` states both a beginning and ending
+    balance — `beginning_balance + sum(all signed amounts)` compared to
+    `ending_balance` within a $0.01 tolerance. Wrapped in its own
+    try/except but otherwise unconditional (no `AIProvider`/config
+    dependency to fail on). Purely diagnostic — never blocks persistence or
+    triggers re-extraction, never touches `status`. Persisted as
+    `Statement.financial_validation` (`JSONB`, migration `a7b8c9d0e1f2`) in
+    the same `session.commit()`. See `docs/DECISIONS.md`'s 2026-08-24
+    "Phase 8" entry.
 
-## Viewing extracted text blocks, document classification, detected regions, discovered schema, and verification (statements page → document analysis)
+## Viewing extracted text blocks, document classification, detected regions, discovered schema, verification, and financial validation (statements page → document analysis)
 
 1. `components/statements-list.tsx` shows a "Text blocks" link per statement row when
    `status === "ingested"` and `content_type === "application/pdf"`, linking to
@@ -245,11 +263,13 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
    pattern as `/transactions`) renders, top to bottom:
    `components/document-analysis-summary.tsx`, `components/
 transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
-   `components/transaction-verification-view.tsx`, then
+   `components/transaction-verification-view.tsx`,
+   `components/financial-validation-view.tsx`, then
    `components/statement-pages-view.tsx`. The summary card GETs
    `GET /api/statements/{id}/analysis` (`backend/app/api/statements.py`, same
    ownership check as `/view`/`/pages`) via `statementsEndpoints.analysis`, showing
-   `document_type`/institution/account/currency/period plus a page-ranged section
+   `document_type`/institution/account/currency/period/beginning and ending
+   balance plus a page-ranged section
    list — or "Not yet classified" when `document_analysis` is `null` (still
    processing, or skipped for a scanned PDF). The regions table GETs
    `GET /api/statements/{id}/transaction-regions` via
@@ -263,8 +283,14 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    `statementsEndpoints.transactionVerification`, showing "all verified" when
    `valid` with no issues, a type/page/description row per flagged issue when not,
    or an explanatory empty state when verification hasn't run (`valid` is `null`).
-   The text-blocks viewer at the bottom GETs `GET /api/statements/{id}/pages` via
-   `statementsEndpoints.pages`.
+   The financial validation section GETs
+   `GET /api/statements/{id}/financial-validation` via
+   `statementsEndpoints.financialValidation`, showing "all checks passed" when
+   `valid` with no issues, a type/description issue table plus a
+   beginning/net-change/expected-vs-actual-ending balance breakdown when a
+   balance check was run, or an explanatory empty state when validation hasn't
+   run. The text-blocks viewer at the bottom GETs `GET /api/statements/{id}/pages`
+   via `statementsEndpoints.pages`.
 3. The `/pages` route returns `{ statement_id, pages }` straight from
    `Statement.pages` (`[]` if analysis hasn't finished/isn't a PDF) — validated
    against `StatementPagesRead`/`PageRead`/`TextBlockRead`; `/transaction-regions`
@@ -279,10 +305,15 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    `{ statement_id, valid, issues }` from `Statement.transaction_verification`
    (unwrapping `{"valid": ..., "issues": [...]}`, `valid` is `null` and `issues`
    is `[]` when verification hasn't run), validated against
-   `StatementTransactionVerificationRead`/`VerificationIssueRead` (all in
-   `backend/app/schemas/statement.py`). None of these are folded into
-   `StatementRead` (used by the statements list) — each can be much larger than
-   everything else in that response.
+   `StatementTransactionVerificationRead`/`VerificationIssueRead`;
+   `/financial-validation` returns `{ statement_id, valid, issues, balance_check }`
+   from `Statement.financial_validation` (unwrapping `{"valid": ..., "issues":
+   [...], "balance_check": ...}`, `valid` is `null`, `issues` is `[]`, and
+   `balance_check` is `null` when validation hasn't run), validated against
+   `StatementFinancialValidationRead`/`FinancialValidationIssueRead`/
+   `BalanceCheckRead` (all in `backend/app/schemas/statement.py`). None of these
+   are folded into `StatementRead` (used by the statements list) — each can be
+   much larger than everything else in that response.
 4. Each page in the text-blocks viewer renders as a collapsible `<details>` (first
    page open, rest collapsed) with a table of `text_blocks` —
    `x`/`y`/`width`/`height`/`text`.

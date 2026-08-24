@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel
@@ -61,6 +62,8 @@ class DocumentAnalysisRead(BaseModel):
     currency: str | None = None
     statement_start: date | None = None
     statement_end: date | None = None
+    beginning_balance: Decimal | None = None
+    ending_balance: Decimal | None = None
     sections: list[DocumentSectionRead] = []
 
 
@@ -115,3 +118,29 @@ class StatementTransactionVerificationRead(BaseModel):
     statement_id: uuid.UUID
     valid: bool | None
     issues: list[VerificationIssueRead]
+
+
+class FinancialValidationIssueRead(BaseModel):
+    type: Literal[
+        "invalid_date",
+        "date_outside_period",
+        "invalid_amount",
+        "duplicate_transaction",
+        "balance_mismatch",
+    ]
+    description: str
+
+
+class BalanceCheckRead(BaseModel):
+    beginning_balance: Decimal
+    net_change: Decimal
+    expected_ending_balance: Decimal
+    actual_ending_balance: Decimal
+    reconciled: bool
+
+
+class StatementFinancialValidationRead(BaseModel):
+    statement_id: uuid.UUID
+    valid: bool | None
+    issues: list[FinancialValidationIssueRead]
+    balance_check: BalanceCheckRead | None
