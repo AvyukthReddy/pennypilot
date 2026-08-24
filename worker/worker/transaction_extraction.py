@@ -82,6 +82,7 @@ class TransactionExtractionService:
         *,
         previous_attempt: TransactionExtraction | None = None,
         verification_issues: list[VerificationIssue] | None = None,
+        recovery_hint: str | None = None,
     ) -> TransactionExtraction:
         messages: list[dict] = [
             {"role": "system", "content": _system_prompt(transaction_fields)},
@@ -98,6 +99,25 @@ class TransactionExtractionService:
                         f"{json.dumps([issue.model_dump() for issue in verification_issues])}. "
                         "Provide a corrected, complete list of transactions for this "
                         "region, fixing every issue listed. Respond with ONLY the "
+                        "corrected JSON object."
+                    ),
+                }
+            )
+        elif recovery_hint is not None:
+            if previous_attempt is not None:
+                messages.append(
+                    {"role": "assistant", "content": previous_attempt.model_dump_json()}
+                )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "A financial reconciliation check found a problem with this "
+                        f"statement: {recovery_hint}. Carefully re-examine this region "
+                        "for any transaction that may have been missed, duplicated, or "
+                        "misread (especially multi-line entries or easy-to-miss "
+                        "amounts). Provide the complete, corrected list of "
+                        "transactions for this region. Respond with ONLY the "
                         "corrected JSON object."
                     ),
                 }

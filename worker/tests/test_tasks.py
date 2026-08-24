@@ -82,6 +82,34 @@ ANALYSIS_WITH_BALANCE = DocumentAnalysis(
     ending_balance=Decimal("992.58"),
 )
 
+# 1000 - 7.42 = 992.58 (matches VALID_EXTRACTION) — but the statement's
+# actual ending balance is 977.16, so the initial extraction is short by
+# a second, missed transaction. Recovery should catch this.
+ANALYSIS_FOR_RECOVERY = DocumentAnalysis(
+    document_type="bank_statement",
+    currency="USD",
+    sections=[{"type": "transactions", "pages": [1]}],
+    beginning_balance=Decimal("1000"),
+    ending_balance=Decimal("977.16"),
+)
+
+RECOVERED_EXTRACTION = TransactionExtraction(
+    transactions=[
+        {
+            "transaction_date": "2026-07-14",
+            "description": "STARBUCKS #2938",
+            "amount": -7.42,
+            "currency": "USD",
+        },
+        {
+            "transaction_date": "2026-07-18",
+            "description": "UBER TRIP",
+            "amount": -15.42,
+            "currency": "USD",
+        },
+    ],
+)
+
 
 class _FakeUnderstandingService:
     """Stand-in for DocumentUnderstandingService — no real network call.
@@ -184,15 +212,32 @@ class _FakeExtractionService:
         error: Exception | None = None,
         results_by_page: dict | None = None,
         retry_results_by_page: dict | None = None,
+        recovery_results_by_page: dict | None = None,
     ):
         self._calls = calls
         self._result = result
         self._error = error
         self._results_by_page = results_by_page or {}
         self._retry_results_by_page = retry_results_by_page or {}
+        self._recovery_results_by_page = recovery_results_by_page or {}
 
-    def extract(self, document, region, transaction_fields, previous_attempt=None, verification_issues=None):
-        self._calls.append((document, region, transaction_fields, previous_attempt, verification_issues))
+    def extract(
+        self,
+        document,
+        region,
+        transaction_fields,
+        previous_attempt=None,
+        verification_issues=None,
+        recovery_hint=None,
+    ):
+        self._calls.append(
+            (document, region, transaction_fields, previous_attempt, verification_issues, recovery_hint)
+        )
+        if recovery_hint is not None and region.page in self._recovery_results_by_page:
+            outcome = self._recovery_results_by_page[region.page]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
         if previous_attempt is not None and region.page in self._retry_results_by_page:
             outcome = self._retry_results_by_page[region.page]
             if isinstance(outcome, Exception):
@@ -209,7 +254,12 @@ class _FakeExtractionService:
 
 
 def _patch_extraction(
-    monkeypatch, result=None, error=None, results_by_page=None, retry_results_by_page=None
+    monkeypatch,
+    result=None,
+    error=None,
+    results_by_page=None,
+    retry_results_by_page=None,
+    recovery_results_by_page=None,
 ):
     calls: list = []
     monkeypatch.setattr(
@@ -221,6 +271,7 @@ def _patch_extraction(
             error=error,
             results_by_page=results_by_page,
             retry_results_by_page=retry_results_by_page,
+            recovery_results_by_page=recovery_results_by_page,
         ),
     )
     return calls
@@ -385,7 +436,12 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert statement.transaction_verification == {"valid": True, "issues": []}
 
     # Financial validation is real (not mocked) — pure Python, no provider.
-    assert statement.financial_validation == {"valid": True, "issues": [], "balance_check": None}
+    assert statement.financial_validation == {
+        "valid": True,
+        "issues": [],
+        "balance_check": None,
+        "recovery_attempts": [],
+    }
 
 
 def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch) -> None:
@@ -601,6 +657,82 @@ def test_parse_statement_skips_financial_validation_without_transactions(monkeyp
 
     assert statement.status == "ingested"
     assert statement.financial_validation is None
+
+
+def test_parse_statement_recovery_fixes_balance_mismatch(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=ANALYSIS_FOR_RECOVERY)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    extraction_calls = _patch_extraction(
+        monkeypatch,
+        results_by_page={1: VALID_EXTRACTION},
+        recovery_results_by_page={1: RECOVERED_EXTRACTION},
+    )
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
+
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    # Original extraction, then one recovery re-extraction for the same page.
+    assert len(extraction_calls) == 2
+    assert extraction_calls[1][5] is not None  # recovery_hint set on the recovery call
+    assert len(session.added) == 2
+    assert {row.description for row in session.added} == {"STARBUCKS #2938", "UBER TRIP"}
+    validation = statement.financial_validation
+    assert validation["valid"] is True
+    assert validation["recovery_attempts"] == [{"page": 1, "succeeded": True}]
+
+
+def test_parse_statement_recovery_gives_up_when_unresolved(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=ANALYSIS_FOR_RECOVERY)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    extraction_calls = _patch_extraction(
+        monkeypatch,
+        results_by_page={1: VALID_EXTRACTION},
+        recovery_results_by_page={1: VALID_EXTRACTION},  # re-extraction reproduces the same gap
+    )
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
+
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert len(extraction_calls) == 2
+    validation = statement.financial_validation
+    assert validation["valid"] is False
+    assert validation["recovery_attempts"] == [{"page": 1, "succeeded": False}]
+    # Recovery didn't help, so the original (pre-recovery) rows are kept.
+    assert len(session.added) == 1
+    assert session.added[0].description == "STARBUCKS #2938"
+
+
+def test_parse_statement_recovery_not_attempted_without_balance_mismatch(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    two_regions = TransactionRegionDetection(
+        transaction_regions=[
+            {"page": 1, "region": [45, 180, 570, 730]},
+            {"page": 2, "region": [45, 180, 570, 730]},
+        ],
+    )
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)  # no beginning/ending balance
+    _patch_region_detection(monkeypatch, result=two_regions)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    # Both regions "find" the exact same transaction -> duplicate, not a balance issue.
+    extraction_calls = _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
+
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    # One extraction call per region, no recovery calls on top.
+    assert len(extraction_calls) == 2
+    assert len(session.added) == 2
+    validation = statement.financial_validation
+    assert validation["valid"] is False
+    assert any(issue["type"] == "duplicate_transaction" for issue in validation["issues"])
+    assert validation["recovery_attempts"] == []
 
 
 def test_parse_statement_invalid_verification_triggers_corrective_retry(monkeypatch) -> None:

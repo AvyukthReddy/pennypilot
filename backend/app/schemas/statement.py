@@ -139,8 +139,14 @@ class BalanceCheckRead(BaseModel):
     reconciled: bool
 
 
+class RecoveryAttemptRead(BaseModel):
+    page: int
+    succeeded: bool
+
+
 class StatementFinancialValidationRead(BaseModel):
     statement_id: uuid.UUID
     valid: bool | None
     issues: list[FinancialValidationIssueRead]
     balance_check: BalanceCheckRead | None
+    recovery_attempts: list[RecoveryAttemptRead] = []

@@ -80,7 +80,7 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `processing`, and renders `parse_error` under the status line once parsing
    finishes (or fails/warns) — see "Statement parsing" below.
 
-## Statement ingestion, analysis, understanding, region detection, schema discovery, transaction extraction, verification, and financial validation (upload → Document → transactions, Phase 1+2+3+4+5+6+7+8)
+## Statement ingestion, analysis, understanding, region detection, schema discovery, transaction extraction, verification, financial validation, and recovery (upload → Document → transactions, Phase 1+2+3+4+5+6+7+8+9)
 
 Earlier parsing-pipeline attempts (`worker/worker/parsing/`) were deleted entirely —
 never committed, so no history to preserve. See `docs/DECISIONS.md`'s "Statement
@@ -248,11 +248,29 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
     balance — `beginning_balance + sum(all signed amounts)` compared to
     `ending_balance` within a $0.01 tolerance. Wrapped in its own
     try/except but otherwise unconditional (no `AIProvider`/config
-    dependency to fail on). Purely diagnostic — never blocks persistence or
-    triggers re-extraction, never touches `status`. Persisted as
-    `Statement.financial_validation` (`JSONB`, migration `a7b8c9d0e1f2`) in
-    the same `session.commit()`. See `docs/DECISIONS.md`'s 2026-08-24
-    "Phase 8" entry.
+    dependency to fail on). Never touches `status` itself. See
+    `docs/DECISIONS.md`'s 2026-08-24 "Phase 8" entry.
+13. When that validation failed with a `balance_mismatch` issue,
+    `worker/worker/recovery.py`'s `attempt_recovery` tries re-extracting one
+    region at a time — regions with no successful Phase-7 verification
+    record first (extraction failed outright, or verification flagged
+    `valid=false`), then the rest in page order — passing the mismatch's
+    description as `TransactionExtractionService.extract`'s new
+    `recovery_hint` param (works even for a region with no prior successful
+    extraction to show as `previous_attempt`). After each candidate's
+    re-extraction, `validate_transactions` runs again over the updated row
+    set; the first candidate that reconciles wins and recovery stops there
+    — no re-verification (Phase 7) in this loop, `validate_transactions`
+    alone is the pass/fail signal. If no candidate reconciles, the original
+    (pre-recovery) rows and validation result are kept. Every candidate
+    tried is recorded in `FinancialValidation.recovery_attempts` (`page`,
+    `succeeded`) regardless of outcome. `Statement.financial_validation`
+    (`JSONB`, migration `a7b8c9d0e1f2` — no new migration for
+    `recovery_attempts` itself, it's a new key in the same blob) is
+    persisted in the same final `session.commit()` as everything else, and
+    it's the *final* (post-recovery, if any ran) row set that gets
+    `session.add_all`'d into the `transactions` table. See
+    `docs/DECISIONS.md`'s 2026-08-24 "Phase 9" entry.
 
 ## Viewing extracted text blocks, document classification, detected regions, discovered schema, verification, and financial validation (statements page → document analysis)
 
@@ -263,6 +281,7 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
    pattern as `/transactions`) renders, top to bottom:
    `components/document-analysis-summary.tsx`, `components/
 transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
+   `components/transactions-view.tsx`,
    `components/transaction-verification-view.tsx`,
    `components/financial-validation-view.tsx`, then
    `components/statement-pages-view.tsx`. The summary card GETs
@@ -278,7 +297,16 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    `GET /api/statements/{id}/transaction-schema` via
    `statementsEndpoints.transactionSchema`, showing a target-field → source-column
    row per discovered field (multiple rows for a split-amount `debit`/`credit`
-   table) — or an explanatory empty state when `null`. The verification table GETs
+   table) — or an explanatory empty state when `null`. Right below it, the
+   transactions table GETs `GET /api/transactions?statement_id={id}` via
+   `transactionsEndpoints.list` (`backend/app/api/transactions.py` — the
+   same endpoint the standalone `/transactions` page and
+   `components/transactions-list.tsx` use, filtered by statement instead of
+   showing the caller's full history), showing every persisted
+   `TransactionRow` for this statement (date/description/amount, up to 200
+   at once, with a "showing N of total" note if there are more) — or an
+   explanatory empty state when none have been extracted yet. The
+   verification table GETs
    `GET /api/statements/{id}/transaction-verification` via
    `statementsEndpoints.transactionVerification`, showing "all verified" when
    `valid` with no issues, a type/page/description row per flagged issue when not,
@@ -288,9 +316,11 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    `statementsEndpoints.financialValidation`, showing "all checks passed" when
    `valid` with no issues, a type/description issue table plus a
    beginning/net-change/expected-vs-actual-ending balance breakdown when a
-   balance check was run, or an explanatory empty state when validation hasn't
-   run. The text-blocks viewer at the bottom GETs `GET /api/statements/{id}/pages`
-   via `statementsEndpoints.pages`.
+   balance check was run, a one-line recovery note ("Recovery: re-extracted
+   page 7 — resolved" / "Recovery attempted on pages 3, 7 — still unresolved")
+   when `recovery_attempts` is non-empty, or an explanatory empty state when
+   validation hasn't run. The text-blocks viewer at the bottom GETs
+   `GET /api/statements/{id}/pages` via `statementsEndpoints.pages`.
 3. The `/pages` route returns `{ statement_id, pages }` straight from
    `Statement.pages` (`[]` if analysis hasn't finished/isn't a PDF) — validated
    against `StatementPagesRead`/`PageRead`/`TextBlockRead`; `/transaction-regions`
@@ -306,12 +336,17 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    (unwrapping `{"valid": ..., "issues": [...]}`, `valid` is `null` and `issues`
    is `[]` when verification hasn't run), validated against
    `StatementTransactionVerificationRead`/`VerificationIssueRead`;
-   `/financial-validation` returns `{ statement_id, valid, issues, balance_check }`
-   from `Statement.financial_validation` (unwrapping `{"valid": ..., "issues":
-   [...], "balance_check": ...}`, `valid` is `null`, `issues` is `[]`, and
-   `balance_check` is `null` when validation hasn't run), validated against
-   `StatementFinancialValidationRead`/`FinancialValidationIssueRead`/
-   `BalanceCheckRead` (all in `backend/app/schemas/statement.py`). None of these
+   `/financial-validation` returns
+   `{ statement_id, valid, issues, balance_check, recovery_attempts }` from
+   `Statement.financial_validation` (unwrapping `{"valid": ..., "issues":
+   [...], "balance_check": ..., "recovery_attempts": [...]}`, `valid` is
+   `null`, `issues`/`recovery_attempts` are `[]`, and `balance_check` is
+   `null` when validation hasn't run — `recovery_attempts` is read with
+   `.get(...)` specifically since it's a key added after `financial_validation`
+   itself already existed, so pre-Phase-9 persisted statements don't have it),
+   validated against `StatementFinancialValidationRead`/
+   `FinancialValidationIssueRead`/`BalanceCheckRead`/`RecoveryAttemptRead`
+   (all in `backend/app/schemas/statement.py`). None of these
    are folded into `StatementRead` (used by the statements list) — each can be
    much larger than everything else in that response.
 4. Each page in the text-blocks viewer renders as a collapsible `<details>` (first

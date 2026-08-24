@@ -210,6 +210,9 @@ def get_statement_financial_validation(
         "valid": validation["valid"] if validation else None,
         "issues": validation["issues"] if validation else [],
         "balance_check": validation["balance_check"] if validation else None,
+        # .get, not [] — statements ingested before Phase 9 have a persisted
+        # financial_validation blob with no recovery_attempts key at all.
+        "recovery_attempts": validation.get("recovery_attempts", []) if validation else [],
     }
 
 
