@@ -36,10 +36,16 @@ class BalanceCheck(BaseModel):
     reconciled: bool
 
 
+class RecoveryAttempt(BaseModel):
+    page: int
+    succeeded: bool
+
+
 class FinancialValidation(BaseModel):
     valid: bool
     issues: list[FinancialValidationIssue] = []
     balance_check: BalanceCheck | None = None
+    recovery_attempts: list[RecoveryAttempt] = []
 
 
 def _check_dates(

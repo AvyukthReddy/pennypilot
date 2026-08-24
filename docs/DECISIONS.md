@@ -4,6 +4,69 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-24 — Phase 9: recovery (targeted re-extraction on balance mismatch)
+
+Phase 8 only reported a `balance_mismatch` — nothing acted on it. New
+`worker/worker/recovery.py`'s `attempt_recovery(...)` re-extracts one region
+at a time and re-validates after each, stopping as soon as the statement
+reconciles, instead of leaving a known-bad result alone or reprocessing
+everything. **Scoped to `balance_mismatch` specifically** — the other four
+`FinancialValidationIssue` types already point at a specific transaction via
+their own description, so there's nothing ambiguous to "determine the
+reason" for; `balance_mismatch` ("the total is off by $X, but which row?")
+is the one genuinely ambiguous case, and it's exactly the user's own worked
+example (`Balance mismatch → Page 7 probably contains missing transaction →
+Re-run Page 7 → ... → PASS`).
+
+**Candidate ordering reuses a signal already collected, rather than
+inventing a new heuristic**: regions with no successful Phase-7 verification
+record (extraction failed outright, or verification flagged `valid=false`)
+are tried first; cleanly-verified regions after, in page order. Each region
+is tried at most once; recovery stops on the first re-extraction that makes
+the statement reconcile — bounding the cost to "usually one extra AI call,
+at most one per region," matching "much cheaper than reprocessing the
+entire document."
+
+**Only re-extracts, doesn't re-verify (Phase 7).** Matches the user's own
+diagram exactly — no verify step shown between "Re-run Page 7" and
+"Validate." Phase 8's `validate_transactions`, re-run after each candidate,
+is the sole pass/fail signal.
+
+**`TransactionExtractionService.extract` gained a third, independent
+correction pathway**: `recovery_hint: str | None`, alongside the existing
+`previous_attempt`/`verification_issues` pair from Phase 7. Doesn't require
+`previous_attempt` — recovery must also work for a region whose *original*
+extraction failed outright and therefore has no prior attempt to show the
+model at all.
+
+**New `worker/worker/recovery.py`, not inlined into `tasks.py`.** The
+candidate-ordering/try/validate/stop-or-continue branching is substantial
+enough to warrant its own file, tested in isolation (fake extraction service
++ a plain `validate` callback) rather than only reachable through the full
+task-pipeline mocks in `test_tasks.py`. Its `extraction_service` parameter
+is always passed explicitly from `tasks.py` (not left to its own internal
+default) — the two live in different modules with separate imports of
+`TransactionExtractionService`, so monkeypatching `tasks.py`'s reference
+alone doesn't reach a default constructed inside `recovery.py` (caught by a
+real `openai.RateLimitError` escaping in a test before this fix).
+
+**`tasks.py`'s per-region loop now keys its results by page**
+(`extraction_by_page`/`verification_by_page` dicts) instead of flattening
+straight into a rows list — recovery needs to replace one region's
+contribution and rebuild the row list, which isn't possible once everything
+is already flattened. Row-building became a small local closure
+(`_rows_from_extractions`), called once normally and again for each
+recovery candidate via `recovery.py`'s `validate` callback.
+
+**`FinancialValidation` gains `recovery_attempts: list[RecoveryAttempt]`**
+(`page`, `succeeded`) for observability — empty when recovery wasn't
+triggered. No new migration: a new key inside the existing
+`Statement.financial_validation` JSONB blob, so the backend route reads it
+with `.get("recovery_attempts", [])` to stay compatible with statements
+ingested before this phase. Surfaced on `/statements/analysis` via a short
+note in `financial-validation-view.tsx` ("Recovery: re-extracted page 7 —
+resolved" or "Recovery attempted on pages 3, 7 — still unresolved").
+
 ## 2026-08-24 — Phase 8: deterministic financial validation
 
 Phases 6-7 extract and AI-verify transactions, but nothing checks the

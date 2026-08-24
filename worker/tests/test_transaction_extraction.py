@@ -163,6 +163,45 @@ def test_extract_with_correction_appends_previous_attempt_and_issues() -> None:
     assert "fixing every issue" in messages[3]["content"]
 
 
+def test_extract_with_recovery_hint_and_previous_attempt() -> None:
+    provider = _FakeProvider([VALID_EXTRACTION_JSON])
+    service = TransactionExtractionService(provider=provider)
+    previous = TransactionExtraction.model_validate_json(VALID_EXTRACTION_JSON)
+
+    service.extract(
+        _make_document(),
+        _make_region(),
+        _make_fields(),
+        previous_attempt=previous,
+        recovery_hint="Expected ending balance 1330.00, statement shows 1380.00",
+    )
+
+    messages = provider.calls[0]
+    assert messages[2]["role"] == "assistant"
+    assert "UBER TRIP" in messages[2]["content"]
+    assert messages[3]["role"] == "user"
+    assert "financial reconciliation check" in messages[3]["content"]
+    assert "1330.00" in messages[3]["content"]
+
+
+def test_extract_with_recovery_hint_and_no_previous_attempt() -> None:
+    provider = _FakeProvider([VALID_EXTRACTION_JSON])
+    service = TransactionExtractionService(provider=provider)
+
+    service.extract(
+        _make_document(),
+        _make_region(),
+        _make_fields(),
+        recovery_hint="Expected ending balance 1330.00, statement shows 1380.00",
+    )
+
+    messages = provider.calls[0]
+    # No previous attempt ⇒ no extra assistant message; the recovery-hint
+    # message is appended directly after the region content.
+    assert messages[2]["role"] == "user"
+    assert "financial reconciliation check" in messages[2]["content"]
+
+
 def test_extract_retries_after_invalid_then_succeeds() -> None:
     provider = _FakeProvider(["not json at all", VALID_EXTRACTION_JSON])
     service = TransactionExtractionService(provider=provider)

@@ -9,9 +9,11 @@ from worker.db import SessionLocal
 from worker.document import Document, Page
 from worker.document_analysis import DocumentAnalysis
 from worker.document_understanding import DocumentUnderstandingService
+from worker.extracted_transactions import TransactionExtraction
 from worker.financial_validation import validate_transactions
 from worker.models import StatementRow, TransactionRow
 from worker.pdf_analysis import analyze_pdf, is_scanned
+from worker.recovery import attempt_recovery
 from worker.transaction_extraction import TransactionExtractionService
 from worker.transaction_region_detection import TransactionRegionDetectionService
 from worker.transaction_regions import TransactionRegionDetection
@@ -36,25 +38,29 @@ def ping() -> str:
 
 @app.task(name="worker.parse_statement")
 def parse_statement(statement_id: str, signed_url: str) -> None:
-    """Phase 1+2+3+4+5+6+7+8: document ingestion, analysis, understanding,
+    """Phase 1+2+3+4+5+6+7+8+9: document ingestion, analysis, understanding,
     transaction-region detection, transaction-schema discovery, transaction
-    extraction, transaction verification, and deterministic financial
-    validation. Downloads the stored file exactly as uploaded (never
-    modified), analyzes PDFs page-by-page (size, text, positioned text
-    blocks, image regions), flags scanned/image-only documents, classifies
-    what the document is (bank/credit-card statement, institution, period,
-    sections, beginning/ending balance) via DocumentUnderstandingService,
-    narrows the pages flagged "transactions" down to an exact bounding
-    region per page via TransactionRegionDetectionService, figures out what
-    a transaction record actually looks like in this document (which
-    columns map to which fields) via TransactionSchemaDiscoveryService,
-    extracts every transaction row region-by-region via
-    TransactionExtractionService, checks each region's extraction against
-    the region itself via TransactionVerificationService (re-extracting
-    once with the found issues as correction feedback when invalid), then
-    inserts the final rows into the transactions table and runs a plain
-    Python (non-AI) reconciliation pass over them via
-    validate_transactions."""
+    extraction, transaction verification, deterministic financial
+    validation, and targeted recovery. Downloads the stored file exactly as
+    uploaded (never modified), analyzes PDFs page-by-page (size, text,
+    positioned text blocks, image regions), flags scanned/image-only
+    documents, classifies what the document is (bank/credit-card statement,
+    institution, period, sections, beginning/ending balance) via
+    DocumentUnderstandingService, narrows the pages flagged "transactions"
+    down to an exact bounding region per page via
+    TransactionRegionDetectionService, figures out what a transaction
+    record actually looks like in this document (which columns map to
+    which fields) via TransactionSchemaDiscoveryService, extracts every
+    transaction row region-by-region via TransactionExtractionService,
+    checks each region's extraction against the region itself via
+    TransactionVerificationService (re-extracting once with the found
+    issues as correction feedback when invalid), runs a plain Python
+    (non-AI) reconciliation pass over the result via validate_transactions,
+    and — when that reconciliation fails with a balance mismatch —
+    re-extracts the most-suspect region(s) one at a time via
+    attempt_recovery until the numbers reconcile or every candidate has
+    been tried, before inserting the final rows into the transactions
+    table."""
     session = SessionLocal()
     try:
         stmt = session.get(StatementRow, uuid.UUID(statement_id))
@@ -161,7 +167,8 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         # A single region failing (bad JSON after retries, network blip)
         # must not discard transactions already extracted from other
         # regions, so each region gets its own try/except.
-        extracted_rows: list[TransactionRow] = []
+        extraction_by_page: dict[int, TransactionExtraction] = {}
+        verification_by_page: dict[int, TransactionVerification] = {}
         verification_reports: list[TransactionVerification] = []
         if transaction_schema and transaction_regions:
             for region in transaction_regions.transaction_regions:
@@ -200,6 +207,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
 
                 if verification is not None:
                     verification_reports.append(verification)
+                    verification_by_page[region.page] = verification
                     if not verification.valid:
                         try:
                             extraction = TransactionExtractionService().extract(
@@ -217,19 +225,27 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                                 exc_info=True,
                             )
 
-                for txn in extraction.transactions:
-                    extracted_rows.append(
-                        TransactionRow(
-                            statement_id=stmt.id,
-                            user_id=stmt.user_id,
-                            transaction_date=txn.transaction_date,
-                            post_date=txn.post_date,
-                            description=txn.description,
-                            amount=txn.amount,
-                            currency=txn.currency
-                            or (document_analysis.currency if document_analysis else None),
-                        )
-                    )
+                extraction_by_page[region.page] = extraction
+
+        def _rows_from_extractions(
+            by_page: dict[int, TransactionExtraction],
+        ) -> list[TransactionRow]:
+            return [
+                TransactionRow(
+                    statement_id=stmt.id,
+                    user_id=stmt.user_id,
+                    transaction_date=txn.transaction_date,
+                    post_date=txn.post_date,
+                    description=txn.description,
+                    amount=txn.amount,
+                    currency=txn.currency
+                    or (document_analysis.currency if document_analysis else None),
+                )
+                for extraction in by_page.values()
+                for txn in extraction.transactions
+            ]
+
+        extracted_rows: list[TransactionRow] = _rows_from_extractions(extraction_by_page)
 
         # Pure Python, no AI call — checks the final (possibly Phase-7-
         # corrected) transaction list for date/amount sanity, duplicates,
@@ -242,6 +258,38 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
             except Exception:
                 logger.warning(
                     "statement %s: financial validation failed", statement_id, exc_info=True
+                )
+
+        # When reconciliation failed with a balance mismatch, re-extract the
+        # most-suspect region(s) one at a time (cheap — one AI call each)
+        # instead of leaving a known-bad statement alone or reprocessing
+        # everything. Stops as soon as one candidate reconciles; gives up
+        # (keeping the original rows/validation) if none do. Best-effort —
+        # attempt_recovery already isolates each candidate's own failures,
+        # this try/except only guards against something unexpected.
+        if (
+            financial_validation
+            and not financial_validation.valid
+            and transaction_schema
+            and transaction_regions
+        ):
+            try:
+                extraction_by_page, financial_validation = attempt_recovery(
+                    document,
+                    transaction_regions,
+                    transaction_schema.transaction_fields,
+                    extraction_by_page,
+                    verification_by_page,
+                    financial_validation,
+                    validate=lambda candidate: validate_transactions(
+                        document_analysis, _rows_from_extractions(candidate)
+                    ),
+                    extraction_service=TransactionExtractionService(),
+                )
+                extracted_rows = _rows_from_extractions(extraction_by_page)
+            except Exception:
+                logger.warning(
+                    "statement %s: recovery failed", statement_id, exc_info=True
                 )
 
         stmt.page_count = page_count

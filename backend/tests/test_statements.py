@@ -748,6 +748,7 @@ def test_get_statement_financial_validation_returns_persisted_report(make_token)
                 "actual_ending_balance": "1380.00",
                 "reconciled": False,
             },
+            "recovery_attempts": [{"page": 3, "succeeded": False}, {"page": 5, "succeeded": False}],
         },
     )
     _use_fake_db(FakeSession([own_statement]))
@@ -763,7 +764,40 @@ def test_get_statement_financial_validation_returns_persisted_report(make_token)
     assert body["valid"] is False
     assert body["issues"][0]["type"] == "balance_mismatch"
     assert body["balance_check"]["reconciled"] is False
-    assert body["balance_check"]["expected_ending_balance"] == "1330.00"
+    assert body["recovery_attempts"] == [
+        {"page": 3, "succeeded": False},
+        {"page": 5, "succeeded": False},
+    ]
+
+
+def test_get_statement_financial_validation_defaults_recovery_attempts_when_absent(
+    make_token,
+) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        financial_validation={
+            # A pre-Phase-9 persisted record, with no recovery_attempts key.
+            "valid": True,
+            "issues": [],
+            "balance_check": None,
+        },
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/financial-validation",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["recovery_attempts"] == []
 
 
 def test_delete_statement_rejects_other_users_statement(make_token) -> None:

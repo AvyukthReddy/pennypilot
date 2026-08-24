@@ -27,12 +27,27 @@ type BalanceCheck = {
   reconciled: boolean;
 };
 
+type RecoveryAttempt = {
+  page: number;
+  succeeded: boolean;
+};
+
 type StatementFinancialValidationResponse = {
   statement_id: string;
   valid: boolean | null;
   issues: FinancialValidationIssue[];
   balance_check: BalanceCheck | null;
+  recovery_attempts: RecoveryAttempt[];
 };
+
+function formatRecoveryNote(attempts: RecoveryAttempt[]): string {
+  const succeededPage = attempts.find((a) => a.succeeded)?.page;
+  const pages = attempts.map((a) => a.page).join(", ");
+  if (succeededPage !== undefined) {
+    return `Recovery: re-extracted page ${succeededPage} — resolved`;
+  }
+  return `Recovery attempted on page${attempts.length > 1 ? "s" : ""} ${pages} — still unresolved`;
+}
 
 const ISSUE_LABELS: Record<FinancialIssueType, string> = {
   invalid_date: "Invalid date",
@@ -138,6 +153,12 @@ export function FinancialValidationView({ statementId }: { statementId: string }
             {report.balance_check.reconciled ? "Yes" : "No"}
           </dd>
         </dl>
+      )}
+
+      {report.recovery_attempts.length > 0 && (
+        <p className="border-t border-zinc-200 pt-3 text-sm text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
+          {formatRecoveryNote(report.recovery_attempts)}
+        </p>
       )}
     </div>
   );
