@@ -33,6 +33,7 @@ class StatementRow(Base):
     document_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     transaction_regions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     transaction_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    transaction_verification: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class TransactionRow(Base):

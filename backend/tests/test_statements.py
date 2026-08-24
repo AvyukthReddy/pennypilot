@@ -560,6 +560,90 @@ def test_get_statement_transaction_schema_returns_persisted_schema(make_token) -
     assert fields["amount"][1]["semantics"] == "credit"
 
 
+def test_get_statement_transaction_verification_requires_auth() -> None:
+    response = client.get(f"/api/statements/{uuid.uuid4()}/transaction-verification")
+    assert response.status_code == 401
+
+
+def test_get_statement_transaction_verification_rejects_other_users_statement(make_token) -> None:
+    other_user_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="not-mine.pdf",
+        storage_path="somewhere/not-mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        transaction_verification=None,
+    )
+    _use_fake_db(FakeSession([other_user_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{other_user_statement.id}/transaction-verification",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_statement_transaction_verification_returns_null_when_not_yet_run(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        transaction_verification=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/transaction-verification",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is None
+    assert body["issues"] == []
+
+
+def test_get_statement_transaction_verification_returns_persisted_report(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        transaction_verification={
+            "valid": False,
+            "issues": [
+                {"type": "missing_transaction", "page": 3, "description": "07/18 UBER TRIP"},
+            ],
+        },
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/transaction-verification",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert len(body["issues"]) == 1
+    assert body["issues"][0]["type"] == "missing_transaction"
+    assert body["issues"][0]["page"] == 3
+
+
 def test_delete_statement_rejects_other_users_statement(make_token) -> None:
     other_user_statement = Statement(
         id=uuid.uuid4(),

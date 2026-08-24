@@ -4,6 +4,56 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-24 — Phase 7: transaction verification (self-correcting extraction)
+
+Phase 6 extracted every region's transactions and persisted them immediately
+— nothing checked the extraction against the region it came from. Phase 7
+adds a second AI pass per region: `worker/worker/transaction_verification.py`'s
+`TransactionVerificationService.verify(document, region, extraction) ->
+TransactionVerification` is given the same region content extraction saw
+(text blocks + optional image, via `_regions.py`'s new `_region_content`,
+factored out of `transaction_extraction.py`'s old `_render_region`) plus the
+extraction's own JSON, and checks for six things: missing transactions,
+duplicates, wrong dates, wrong amounts, wrong debit/credit signs, and
+multi-line rows that were split or merged. New closed schema
+(`worker/worker/verification_issues.py`): `VerificationIssue` (`type` — a
+`Literal` of those six categories plus `other` as a catch-all — `page`,
+`description`) and `TransactionVerification` (`valid: bool`, `issues:
+list[VerificationIssue]`).
+
+**When invalid, extraction is retried once with the issues as correction
+feedback — the retry's output is trusted and persisted regardless of
+whether it's still flagged (no re-verification loop).** This was an
+explicit scoping choice (over "persist anyway, just flag" or "drop the
+region entirely") — self-correction was worth the extra AI call per flagged
+region over either silently keeping known-bad data or discarding
+otherwise-good data over one issue.
+`TransactionExtractionService.extract` gained two optional keyword-only
+params, `previous_attempt`/`verification_issues`; when both are given, the
+prior JSON answer and the issues (plus a "fix these" instruction) are
+appended to the message list before the existing self-repair retry loop
+runs — a different kind of retry (content correctness) than that loop's
+(JSON validity), sharing the same call shape.
+
+**Layered best-effort, matching the rest of this pipeline**: extraction
+failing skips the region entirely (unchanged from Phase 6); verification
+failing skips the retry and keeps the original extraction (no verdict, so
+nothing to correct against); the corrective retry itself failing falls back
+to the original extraction rather than losing the region's data. Nothing
+here can fail the statement.
+
+**Persisted as `Statement.transaction_verification`** (nullable `JSONB`,
+migration `f6a7b8c9d0e1`) — the aggregate of every region's *first*
+verification pass (`valid` = AND across regions, `issues` = concatenated,
+each already carrying its own `page`). The retry outcome itself isn't
+separately recorded — the report reflects what was initially found; the
+correction is only visible via the `transactions` rows it produced.
+Exposed via a new `GET /api/statements/{id}/transaction-verification`
+(`backend/app/api/statements.py`, same ownership pattern as
+`/transaction-schema`) and a new section on `/statements/analysis`
+(`frontend/src/components/transaction-verification-view.tsx`), consistent
+with every other phase's debug/observability surface in this pipeline.
+
 ## 2026-08-24 — Phase 6 follow-up: multimodal (image + text) input for region detection and extraction
 
 Every AI service up to this point read purely from `page.text_blocks` —

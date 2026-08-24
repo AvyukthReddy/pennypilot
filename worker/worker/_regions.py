@@ -2,8 +2,10 @@ import io
 
 from PIL import Image
 
-from worker.document import Page, TextBlock
+from worker._multimodal import image_part, text_part
+from worker.document import Document, Page, TextBlock
 from worker.pdf_analysis import PAGE_IMAGE_RESOLUTION
+from worker.transaction_regions import TransactionRegion
 
 
 def _blocks_in_region(page: Page, region: tuple[float, float, float, float]) -> list[TextBlock]:
@@ -35,3 +37,25 @@ def _image_for_region(page: Page, region: tuple[float, float, float, float]) -> 
         out = io.BytesIO()
         cropped.save(out, format="PNG")
         return out.getvalue()
+
+
+def _region_content(document: Document, region: TransactionRegion) -> list[dict]:
+    """Builds the text-part-plus-optional-image-part content for a single
+    detected region — the coordinate-tagged text blocks inside it, plus
+    (when available) the region cropped out of that page's rendered image.
+    Shared by every AI service that operates on one region at a time
+    (extraction, verification)."""
+    pages_by_number = {page.page_number: page for page in document.pages}
+    page = pages_by_number.get(region.page)
+    if page is None:
+        return [text_part("")]
+    lines = [f"=== Page {region.page} ==="]
+    for block in _blocks_in_region(page, region.region):
+        x0, y0 = block.x, block.y
+        x1, y1 = block.x + block.width, block.y + block.height
+        lines.append(f"[{x0:.0f}, {y0:.0f}, {x1:.0f}, {y1:.0f}] {block.text!r}")
+    content: list[dict] = [text_part("\n".join(lines))]
+    image = _image_for_region(page, region.region)
+    if image is not None:
+        content.append(image_part(image))
+    return content

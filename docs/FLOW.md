@@ -80,7 +80,7 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `processing`, and renders `parse_error` under the status line once parsing
    finishes (or fails/warns) — see "Statement parsing" below.
 
-## Statement ingestion, analysis, understanding, region detection, schema discovery, and transaction extraction (upload → Document → transactions, Phase 1+2+3+4+5+6)
+## Statement ingestion, analysis, understanding, region detection, schema discovery, transaction extraction, and verification (upload → Document → transactions, Phase 1+2+3+4+5+6+7)
 
 Earlier parsing-pipeline attempts (`worker/worker/parsing/`) were deleted entirely —
 never committed, so no history to preserve. See `docs/DECISIONS.md`'s "Statement
@@ -213,8 +213,30 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
     `Statement` row. Skipped entirely when there's no `transaction_schema`.
     See `docs/DECISIONS.md`'s 2026-08-24 "Phase 6" and "Phase 6 follow-up"
     entries.
+11. Immediately after a region's extraction succeeds,
+    `worker/worker/transaction_verification.py`'s
+    `TransactionVerificationService.verify` checks that extraction against
+    the same region content (`_regions.py`'s `_region_content` — the same
+    text+image builder step 10 uses) plus the extracted JSON itself, for
+    missing/duplicate transactions, wrong dates/amounts/signs, and
+    split-or-merged multi-line rows. The reply is validated against the
+    closed `TransactionVerification` schema
+    (`worker/worker/verification_issues.py`). Same `AIProvider`, same
+    one-self-repair-retry, but best-effort in a new way: if verification
+    itself fails, the region's original extraction is kept as-is
+    (uncorrected). If verification succeeds and comes back `valid=false`,
+    `TransactionExtractionService.extract` is called again for that same
+    region with `previous_attempt`/`verification_issues` set — the prior
+    JSON answer plus the issues are appended to the prompt as correction
+    feedback — and whatever that retry produces is what actually becomes
+    `TransactionRow`s, whether or not it's still flagged (no
+    re-verification loop; a retry failure falls back to the pre-retry
+    extraction). Every region's *first* verification result is aggregated
+    into `Statement.transaction_verification` (`JSONB`, migration
+    `f6a7b8c9d0e1`) in the same `session.commit()` as everything else. See
+    `docs/DECISIONS.md`'s 2026-08-24 "Phase 7" entry.
 
-## Viewing extracted text blocks, document classification, detected regions, and discovered schema (statements page → document analysis)
+## Viewing extracted text blocks, document classification, detected regions, discovered schema, and verification (statements page → document analysis)
 
 1. `components/statements-list.tsx` shows a "Text blocks" link per statement row when
    `status === "ingested"` and `content_type === "application/pdf"`, linking to
@@ -222,7 +244,8 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
 2. `frontend/src/app/statements/analysis/page.tsx` (server component, same auth-gate
    pattern as `/transactions`) renders, top to bottom:
    `components/document-analysis-summary.tsx`, `components/
-transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`, then
+transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
+   `components/transaction-verification-view.tsx`, then
    `components/statement-pages-view.tsx`. The summary card GETs
    `GET /api/statements/{id}/analysis` (`backend/app/api/statements.py`, same
    ownership check as `/view`/`/pages`) via `statementsEndpoints.analysis`, showing
@@ -235,8 +258,13 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`, then
    `GET /api/statements/{id}/transaction-schema` via
    `statementsEndpoints.transactionSchema`, showing a target-field → source-column
    row per discovered field (multiple rows for a split-amount `debit`/`credit`
-   table) — or an explanatory empty state when `null`. The text-blocks viewer at
-   the bottom GETs `GET /api/statements/{id}/pages` via `statementsEndpoints.pages`.
+   table) — or an explanatory empty state when `null`. The verification table GETs
+   `GET /api/statements/{id}/transaction-verification` via
+   `statementsEndpoints.transactionVerification`, showing "all verified" when
+   `valid` with no issues, a type/page/description row per flagged issue when not,
+   or an explanatory empty state when verification hasn't run (`valid` is `null`).
+   The text-blocks viewer at the bottom GETs `GET /api/statements/{id}/pages` via
+   `statementsEndpoints.pages`.
 3. The `/pages` route returns `{ statement_id, pages }` straight from
    `Statement.pages` (`[]` if analysis hasn't finished/isn't a PDF) — validated
    against `StatementPagesRead`/`PageRead`/`TextBlockRead`; `/transaction-regions`
@@ -247,9 +275,14 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`, then
    returns `{ statement_id, transaction_fields }` from
    `Statement.transaction_schema` (unwrapping `{"transaction_fields": {...}}`),
    validated against `StatementTransactionSchemaRead`/`TransactionFieldsRead`/
-   `FieldSourceRead` (all in `backend/app/schemas/statement.py`). None of these
-   are folded into `StatementRead` (used by the statements list) — each can be
-   much larger than everything else in that response.
+   `FieldSourceRead`; `/transaction-verification` returns
+   `{ statement_id, valid, issues }` from `Statement.transaction_verification`
+   (unwrapping `{"valid": ..., "issues": [...]}`, `valid` is `null` and `issues`
+   is `[]` when verification hasn't run), validated against
+   `StatementTransactionVerificationRead`/`VerificationIssueRead` (all in
+   `backend/app/schemas/statement.py`). None of these are folded into
+   `StatementRead` (used by the statements list) — each can be much larger than
+   everything else in that response.
 4. Each page in the text-blocks viewer renders as a collapsible `<details>` (first
    page open, rest collapsed) with a table of `text_blocks` —
    `x`/`y`/`width`/`height`/`text`.

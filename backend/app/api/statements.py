@@ -15,6 +15,7 @@ from app.schemas.statement import (
     StatementRead,
     StatementTransactionRegionsRead,
     StatementTransactionSchemaRead,
+    StatementTransactionVerificationRead,
 )
 from app.services.storage import delete_statement, get_statement_view_url, upload_statement
 
@@ -172,6 +173,24 @@ def get_statement_transaction_schema(
         else None
     )
     return {"statement_id": statement.id, "transaction_fields": fields}
+
+
+@router.get(
+    "/api/statements/{statement_id}/transaction-verification",
+    response_model=StatementTransactionVerificationRead,
+)
+def get_statement_transaction_verification(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    verification = statement.transaction_verification
+    return {
+        "statement_id": statement.id,
+        "valid": verification["valid"] if verification else None,
+        "issues": verification["issues"] if verification else [],
+    }
 
 
 @router.delete("/api/statements/{statement_id}")
