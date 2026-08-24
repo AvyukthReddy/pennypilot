@@ -281,6 +281,7 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
    pattern as `/transactions`) renders, top to bottom:
    `components/document-analysis-summary.tsx`, `components/
 transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
+   `components/transactions-view.tsx`,
    `components/transaction-verification-view.tsx`,
    `components/financial-validation-view.tsx`, then
    `components/statement-pages-view.tsx`. The summary card GETs
@@ -296,7 +297,16 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    `GET /api/statements/{id}/transaction-schema` via
    `statementsEndpoints.transactionSchema`, showing a target-field → source-column
    row per discovered field (multiple rows for a split-amount `debit`/`credit`
-   table) — or an explanatory empty state when `null`. The verification table GETs
+   table) — or an explanatory empty state when `null`. Right below it, the
+   transactions table GETs `GET /api/transactions?statement_id={id}` via
+   `transactionsEndpoints.list` (`backend/app/api/transactions.py` — the
+   same endpoint the standalone `/transactions` page and
+   `components/transactions-list.tsx` use, filtered by statement instead of
+   showing the caller's full history), showing every persisted
+   `TransactionRow` for this statement (date/description/amount, up to 200
+   at once, with a "showing N of total" note if there are more) — or an
+   explanatory empty state when none have been extracted yet. The
+   verification table GETs
    `GET /api/statements/{id}/transaction-verification` via
    `statementsEndpoints.transactionVerification`, showing "all verified" when
    `valid` with no issues, a type/page/description row per flagged issue when not,

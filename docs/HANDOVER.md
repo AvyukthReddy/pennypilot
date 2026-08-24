@@ -145,6 +145,10 @@ request-flow maps).
   yet classified"), `components/transaction-regions-view.tsx` (page/region
   table, or an explanatory empty state), `components/transaction-schema-view.tsx`
   (target-field → source-column table, or an explanatory empty state),
+  `components/transactions-view.tsx` (a date/description/amount table of
+  every persisted `TransactionRow` for the statement, via the same
+  `GET /api/transactions?statement_id=...` the standalone `/transactions`
+  page uses, or an explanatory empty state),
   `components/transaction-verification-view.tsx` ("all verified", a
   type/page/description issue table, or an explanatory empty state),
   `components/financial-validation-view.tsx` ("all checks passed", a
