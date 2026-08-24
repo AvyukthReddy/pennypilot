@@ -4,14 +4,14 @@ import logging
 from pydantic import ValidationError
 
 from worker._ai_json import strip_markdown_fence
-from worker._multimodal import image_part, text_part
-from worker._regions import _blocks_in_region, _image_for_region
+from worker._regions import _region_content
 from worker.ai_provider import AIProvider
 from worker.config import default_ai_provider_config
 from worker.document import Document
 from worker.extracted_transactions import TransactionExtraction
 from worker.transaction_regions import TransactionRegion
 from worker.transaction_schema import TransactionFields
+from worker.verification_issues import VerificationIssue
 
 logger = logging.getLogger(__name__)
 
@@ -21,23 +21,6 @@ MAX_ATTEMPTS = 2  # 1 initial + 1 self-repair retry
 class TransactionExtractionError(Exception):
     """The model never returned a TransactionExtraction-shaped response
     within MAX_ATTEMPTS."""
-
-
-def _render_region(document: Document, region: TransactionRegion) -> list[dict]:
-    pages_by_number = {page.page_number: page for page in document.pages}
-    page = pages_by_number.get(region.page)
-    if page is None:
-        return [text_part("")]
-    lines = [f"=== Page {region.page} ==="]
-    for block in _blocks_in_region(page, region.region):
-        x0, y0 = block.x, block.y
-        x1, y1 = block.x + block.width, block.y + block.height
-        lines.append(f"[{x0:.0f}, {y0:.0f}, {x1:.0f}, {y1:.0f}] {block.text!r}")
-    content: list[dict] = [text_part("\n".join(lines))]
-    image = _image_for_region(page, region.region)
-    if image is not None:
-        content.append(image_part(image))
-    return content
 
 
 def _system_prompt(transaction_fields: TransactionFields) -> str:
@@ -96,11 +79,29 @@ class TransactionExtractionService:
         document: Document,
         region: TransactionRegion,
         transaction_fields: TransactionFields,
+        *,
+        previous_attempt: TransactionExtraction | None = None,
+        verification_issues: list[VerificationIssue] | None = None,
     ) -> TransactionExtraction:
         messages: list[dict] = [
             {"role": "system", "content": _system_prompt(transaction_fields)},
-            {"role": "user", "content": _render_region(document, region)},
+            {"role": "user", "content": _region_content(document, region)},
         ]
+
+        if previous_attempt is not None and verification_issues is not None:
+            messages.append({"role": "assistant", "content": previous_attempt.model_dump_json()})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "A verification pass found problems with that extraction: "
+                        f"{json.dumps([issue.model_dump() for issue in verification_issues])}. "
+                        "Provide a corrected, complete list of transactions for this "
+                        "region, fixing every issue listed. Respond with ONLY the "
+                        "corrected JSON object."
+                    ),
+                }
+            )
 
         last_error: str | None = None
         for _ in range(MAX_ATTEMPTS):

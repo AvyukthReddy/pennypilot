@@ -11,6 +11,7 @@ from worker.extracted_transactions import TransactionExtraction
 from worker.models import StatementRow
 from worker.transaction_regions import TransactionRegionDetection
 from worker.transaction_schema import TransactionSchemaDiscovery
+from worker.verification_issues import TransactionVerification
 
 VALID_ANALYSIS = DocumentAnalysis(
     document_type="bank_statement",
@@ -54,6 +55,24 @@ VALID_EXTRACTION = TransactionExtraction(
 )
 
 EMPTY_EXTRACTION = TransactionExtraction(transactions=[])
+
+VALID_VERIFICATION = TransactionVerification(valid=True, issues=[])
+
+CORRECTED_EXTRACTION = TransactionExtraction(
+    transactions=[
+        {
+            "transaction_date": "2026-07-14",
+            "description": "STARBUCKS #2938",
+            "amount": -7.50,
+            "currency": "USD",
+        },
+    ],
+)
+
+INVALID_VERIFICATION = TransactionVerification(
+    valid=False,
+    issues=[{"type": "wrong_amount", "page": 1, "description": "amount should be -7.50"}],
+)
 
 
 class _FakeUnderstandingService:
@@ -146,7 +165,9 @@ class _FakeExtractionService:
     """Stand-in for TransactionExtractionService — no real network call.
     `results_by_page` lets a test vary the outcome per region (e.g. one page
     succeeds, another raises), falling back to a single `result`/`error` for
-    every region when not given."""
+    every region when not given. `retry_results_by_page` is consulted
+    instead whenever `previous_attempt` is set — i.e. this is the corrective
+    re-extraction call, not the original one."""
 
     def __init__(
         self,
@@ -154,14 +175,21 @@ class _FakeExtractionService:
         result: TransactionExtraction | None = None,
         error: Exception | None = None,
         results_by_page: dict | None = None,
+        retry_results_by_page: dict | None = None,
     ):
         self._calls = calls
         self._result = result
         self._error = error
         self._results_by_page = results_by_page or {}
+        self._retry_results_by_page = retry_results_by_page or {}
 
-    def extract(self, document, region, transaction_fields):
-        self._calls.append((document, region, transaction_fields))
+    def extract(self, document, region, transaction_fields, previous_attempt=None, verification_issues=None):
+        self._calls.append((document, region, transaction_fields, previous_attempt, verification_issues))
+        if previous_attempt is not None and region.page in self._retry_results_by_page:
+            outcome = self._retry_results_by_page[region.page]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
         if region.page in self._results_by_page:
             outcome = self._results_by_page[region.page]
             if isinstance(outcome, Exception):
@@ -172,14 +200,57 @@ class _FakeExtractionService:
         return self._result
 
 
-def _patch_extraction(monkeypatch, result=None, error=None, results_by_page=None):
+def _patch_extraction(
+    monkeypatch, result=None, error=None, results_by_page=None, retry_results_by_page=None
+):
     calls: list = []
     monkeypatch.setattr(
         tasks,
         "TransactionExtractionService",
         lambda: _FakeExtractionService(
-            calls, result=result, error=error, results_by_page=results_by_page
+            calls,
+            result=result,
+            error=error,
+            results_by_page=results_by_page,
+            retry_results_by_page=retry_results_by_page,
         ),
+    )
+    return calls
+
+
+class _FakeVerificationService:
+    """Stand-in for TransactionVerificationService — no real network call."""
+
+    def __init__(
+        self,
+        calls: list,
+        result: TransactionVerification | None = None,
+        error: Exception | None = None,
+        results_by_page: dict | None = None,
+    ):
+        self._calls = calls
+        self._result = result
+        self._error = error
+        self._results_by_page = results_by_page or {}
+
+    def verify(self, document, region, extraction):
+        self._calls.append((document, region, extraction))
+        if region.page in self._results_by_page:
+            outcome = self._results_by_page[region.page]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        if self._error:
+            raise self._error
+        return self._result
+
+
+def _patch_verification(monkeypatch, result=None, error=None, results_by_page=None):
+    calls: list = []
+    monkeypatch.setattr(
+        tasks,
+        "TransactionVerificationService",
+        lambda: _FakeVerificationService(calls, result=result, error=error, results_by_page=results_by_page),
     )
     return calls
 
@@ -260,6 +331,7 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     region_calls = _patch_region_detection(monkeypatch, result=VALID_REGIONS)
     schema_calls = _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
     extraction_calls = _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
+    verification_calls = _patch_verification(monkeypatch, result=VALID_VERIFICATION)
 
     session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
 
@@ -298,6 +370,11 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert row.description == "STARBUCKS #2938"
     assert row.amount == Decimal("-7.42")
     assert row.currency == "USD"
+
+    assert len(verification_calls) == 1
+    # No retry — extraction was only called once for the region.
+    assert len(extraction_calls) == 1
+    assert statement.transaction_verification == {"valid": True, "issues": []}
 
 
 def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch) -> None:
@@ -425,6 +502,7 @@ def test_parse_statement_extraction_partial_failure_keeps_other_regions(monkeypa
         monkeypatch,
         results_by_page={1: RuntimeError("model unreachable"), 2: VALID_EXTRACTION},
     )
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
 
     session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
 
@@ -451,12 +529,83 @@ def test_parse_statement_extraction_currency_falls_back_to_document_analysis(mon
     _patch_region_detection(monkeypatch, result=VALID_REGIONS)
     _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
     _patch_extraction(monkeypatch, result=no_currency_extraction)
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
 
     session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
 
     assert statement.status == "ingested"
     assert len(session.added) == 1
     assert session.added[0].currency == VALID_ANALYSIS.currency == "USD"
+
+
+def test_parse_statement_invalid_verification_triggers_corrective_retry(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    extraction_calls = _patch_extraction(
+        monkeypatch,
+        results_by_page={1: VALID_EXTRACTION},
+        retry_results_by_page={1: CORRECTED_EXTRACTION},
+    )
+    verification_calls = _patch_verification(monkeypatch, result=INVALID_VERIFICATION)
+
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert len(verification_calls) == 1
+    # Original call + one corrective retry.
+    assert len(extraction_calls) == 2
+    assert extraction_calls[0][3] is None  # previous_attempt on the original call
+    assert extraction_calls[1][3] == VALID_EXTRACTION  # previous_attempt on the retry
+    assert extraction_calls[1][4] == INVALID_VERIFICATION.issues
+    # Persisted rows come from the retry's corrected output.
+    assert len(session.added) == 1
+    assert session.added[0].amount == Decimal("-7.50")
+    # The persisted report reflects the *first* (invalid) verification.
+    assert statement.transaction_verification["valid"] is False
+    assert len(statement.transaction_verification["issues"]) == 1
+    assert statement.transaction_verification["issues"][0]["type"] == "wrong_amount"
+
+
+def test_parse_statement_verification_failure_is_non_fatal(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    extraction_calls = _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
+    _patch_verification(monkeypatch, error=RuntimeError("model unreachable"))
+
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    # No verdict at all ⇒ no retry attempted, original extraction kept.
+    assert len(extraction_calls) == 1
+    assert len(session.added) == 1
+    assert session.added[0].description == "STARBUCKS #2938"
+    assert statement.transaction_verification is None
+
+
+def test_parse_statement_corrective_retry_failure_keeps_original_extraction(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    extraction_calls = _patch_extraction(
+        monkeypatch,
+        results_by_page={1: VALID_EXTRACTION},
+        retry_results_by_page={1: RuntimeError("model unreachable")},
+    )
+    _patch_verification(monkeypatch, result=INVALID_VERIFICATION)
+
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert len(extraction_calls) == 2
+    # The retry failed, so the pre-retry (original) extraction is persisted.
+    assert len(session.added) == 1
+    assert session.added[0].amount == Decimal("-7.42")
+    assert statement.transaction_verification["valid"] is False
 
 
 def test_parse_statement_download_failure_redacts_message(monkeypatch) -> None:

@@ -8,5 +8,7 @@ export const statementsEndpoints = {
   analysis: (id: string) => getApiUrl(`/api/statements/${id}/analysis`),
   transactionRegions: (id: string) => getApiUrl(`/api/statements/${id}/transaction-regions`),
   transactionSchema: (id: string) => getApiUrl(`/api/statements/${id}/transaction-schema`),
+  transactionVerification: (id: string) =>
+    getApiUrl(`/api/statements/${id}/transaction-verification`),
   delete: (id: string) => getApiUrl(`/api/statements/${id}`),
 };

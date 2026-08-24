@@ -95,3 +95,23 @@ class TransactionFieldsRead(BaseModel):
 class StatementTransactionSchemaRead(BaseModel):
     statement_id: uuid.UUID
     transaction_fields: TransactionFieldsRead | None
+
+
+class VerificationIssueRead(BaseModel):
+    type: Literal[
+        "missing_transaction",
+        "duplicate_transaction",
+        "wrong_date",
+        "wrong_amount",
+        "wrong_sign",
+        "split_or_merged_transaction",
+        "other",
+    ]
+    page: int
+    description: str
+
+
+class StatementTransactionVerificationRead(BaseModel):
+    statement_id: uuid.UUID
+    valid: bool | None
+    issues: list[VerificationIssueRead]

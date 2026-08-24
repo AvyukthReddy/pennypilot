@@ -45,7 +45,8 @@ request-flow maps).
   navbar. Uploads are deduplicated by SHA-256 (`Statement.file_hash`) — re-uploading
   the same file for the same user returns `409`.
 - **Statement ingestion, analysis, understanding, region detection, schema
-  discovery, and transaction extraction (Phase 1+2+3+4+5+6)**: after upload, a Celery
+  discovery, transaction extraction, and verification (Phase 1+2+3+4+5+6+7)**:
+  after upload, a Celery
   task (`worker.parse_statement`) downloads the stored file unmodified, then for
   PDFs runs `worker/worker/pdf_analysis.py`'s `analyze_pdf` (via `pdfplumber`) to
   produce a `Page` per page (`worker/worker/document.py` — `width`/`height`/
@@ -80,43 +81,59 @@ request-flow maps).
   transaction row on that page, validated against the closed
   `TransactionExtraction` schema (`worker/worker/extracted_transactions.py`
   — `transaction_date`/`post_date`/`description`/`amount`/`currency` only,
-  no category, no prose). `Statement.page_count`/`parser_version`/
+  no category, no prose). Immediately after each region's extraction,
+  `worker/worker/transaction_verification.py`'s
+  `TransactionVerificationService.verify` checks it against that same
+  region's content plus its own extracted JSON, for missing/duplicate
+  transactions, wrong dates/amounts/signs, and split-or-merged multi-line
+  rows — validated against the closed `TransactionVerification` schema
+  (`worker/worker/verification_issues.py`). When invalid,
+  `TransactionExtractionService.extract` is called again for that region
+  with the issues as correction feedback, and that retry's output is what
+  actually gets persisted (trusted either way, not re-verified).
+  `Statement.page_count`/`parser_version`/
   `needs_ocr`/`pages`/`document_analysis`/`transaction_regions`/
-  `transaction_schema` all get persisted (the four JSON-shaped ones as
-  `JSONB`, migrations `b2e3d4f5a6c7`/`c3f4a5b6d7e8`/`d4e5f6a7b8c9`/
-  `e5f6a7b8c9d0`), `status` becomes `"ingested"` (a scanned PDF, or any AI
+  `transaction_schema`/`transaction_verification` all get persisted (the
+  five JSON-shaped ones as `JSONB`, migrations
+  `b2e3d4f5a6c7`/`c3f4a5b6d7e8`/`d4e5f6a7b8c9`/`e5f6a7b8c9d0`/
+  `f6a7b8c9d0e1`), `status` becomes `"ingested"` (a scanned PDF, or any AI
   step failing, still succeeds — each is independently best-effort/non-fatal,
-  and extraction is best-effort *per region*, so one page failing doesn't
-  discard another page's already-extracted transactions), and every
-  successfully extracted row is inserted into the `transactions` table
-  (`worker/worker/models.py`'s `TransactionRow`). Earlier parsing-pipeline
-  attempts were deleted entirely (never committed, so no history to
-  preserve). See [DECISIONS.md](DECISIONS.md)'s "Phase 6: transaction
-  extraction", "Phase 5: transaction schema discovery", "Phase 4: transaction
-  region detection", "Phase 3: document understanding", "Persist
-  `Statement.pages`", "Phase 2: PDF document analysis", and "Statement
-  parsing scoped down to Phase 1" entries.
+  and extraction/verification are best-effort *per region*, so one page
+  failing doesn't discard another page's already-extracted transactions),
+  and every successfully extracted (and possibly corrected) row is inserted
+  into the `transactions` table (`worker/worker/models.py`'s
+  `TransactionRow`). Earlier parsing-pipeline attempts were deleted entirely
+  (never committed, so no history to preserve). See
+  [DECISIONS.md](DECISIONS.md)'s "Phase 7: transaction verification", "Phase
+  6: transaction extraction", "Phase 5: transaction schema discovery", "Phase
+  4: transaction region detection", "Phase 3: document understanding",
+  "Persist `Statement.pages`", "Phase 2: PDF document analysis", and
+  "Statement parsing scoped down to Phase 1" entries.
 - **Viewing extracted text blocks, document classification, detected regions,
-  and discovered schema**:
-  `GET /api/statements/{id}/pages`, `/analysis`, `/transaction-regions`, and
-  `/transaction-schema` (`backend/app/api/statements.py`) return a statement's
-  persisted `pages`/`document_analysis`/`transaction_regions`/
-  `transaction_schema` (same ownership check as `/view`). Frontend: a "Text
-  blocks" link per statement row (`components/statements-list.tsx`, shown for
-  `status === "ingested"` PDFs) opens `/statements/analysis`, which renders, top
-  to bottom: `components/document-analysis-summary.tsx` (document type/
-  institution/account/currency/period + section list, or "Not yet classified"),
-  `components/transaction-regions-view.tsx` (page/region table, or an
-  explanatory empty state), `components/transaction-schema-view.tsx`
-  (target-field → source-column table, or an explanatory empty state), then
+  discovered schema, and verification report**:
+  `GET /api/statements/{id}/pages`, `/analysis`, `/transaction-regions`,
+  `/transaction-schema`, and `/transaction-verification`
+  (`backend/app/api/statements.py`) return a statement's persisted
+  `pages`/`document_analysis`/`transaction_regions`/`transaction_schema`/
+  `transaction_verification` (same ownership check as `/view`). Frontend: a
+  "Text blocks" link per statement row (`components/statements-list.tsx`,
+  shown for `status === "ingested"` PDFs) opens `/statements/analysis`, which
+  renders, top to bottom: `components/document-analysis-summary.tsx`
+  (document type/institution/account/currency/period + section list, or "Not
+  yet classified"), `components/transaction-regions-view.tsx` (page/region
+  table, or an explanatory empty state), `components/transaction-schema-view.tsx`
+  (target-field → source-column table, or an explanatory empty state),
+  `components/transaction-verification-view.tsx` ("all verified", a
+  type/page/description issue table, or an explanatory empty state), then
   `components/statement-pages-view.tsx` (each page as a collapsible section with
   a table of `text_blocks`). This is a debugging/inspection view, not part of
   the intended end-user product surface — it exists so extraction/
-  classification/region/schema quality can be checked against real statements
-  before Phase 6 (a real transaction parser) gets built on top of it.
+  classification/region/schema/verification quality can be checked against
+  real statements.
 - **Worker**: `worker/` (Celery) has one task (`worker.parse_statement`,
   `worker/worker/tasks.py`, ingestion + analysis + understanding + region
-  detection + schema discovery + transaction extraction) with its own DB
+  detection + schema discovery + transaction extraction + verification) with
+  its own DB
   access layer (`worker/worker/config.py`, `db.py`, `models.py` — hand-mirrored,
   non-authoritative mappings; Alembic in `backend/` remains the sole schema
   authority). Dependencies: `celery[redis]`, `sqlalchemy`, `psycopg`, `httpx`,
@@ -147,44 +164,30 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: multimodal
-  (image + text) input for transaction region detection and extraction.
-  `worker/worker/document.py`'s `Page` gained `image: bytes | None` — a
-  rendered PNG of the whole page (`worker/worker/pdf_analysis.py`'s
-  `analyze_pdf`, via `pdfplumber`'s `page.to_image()`, best-effort per page,
-  `None` on render failure), never persisted (stripped before
-  `Statement.pages` is written). New `worker/worker/_multimodal.py`
-  (`text_part`/`image_part` — OpenAI-format content-part builders) and
-  `_image_for_region` (added to `worker/worker/_regions.py`, crops a page's
-  image to a region's pixel bbox). `TransactionRegionDetectionService`
-  (Phase 4) now sends one user message per candidate page (text blocks +
-  that page's image, when available); `TransactionExtractionService`
-  (Phase 6) sends the region cropped to its own bbox. `AIProvider` itself
-  needed no changes. Classification (Phase 3) and column-mapping (Phase 5)
-  stay text-only — confirmed out of scope for this pass. `Document.data`
-  (raw PDF bytes) is unchanged, still passed through as-is. See
-  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 6 follow-up" entry.
-  Worker: 40 tests pass (`cd worker && poetry run pytest -q`); ruff clean.
-  `Pillow` is now a direct worker dependency (was already transitive via
-  `pdfplumber`) — `poetry.lock` re-synced. Backend/frontend untouched by
-  this pass, so their last-known counts (47 backend tests) still apply —
-  not re-verified.
-- Previously completed: Phase 6 transaction extraction —
-  `worker/worker/transaction_extraction.py`'s `TransactionExtractionService`
-  reads every transaction row out of a single detected region (called once
-  per region, not once per document), using the Phase 5 column mapping to
-  know which column means what. Produces closed-schema `TransactionExtraction`
-  (`worker/worker/extracted_transactions.py`) rows —
-  `transaction_date`/`post_date`/`description`/`amount`/`currency` only, no
-  category, no prose — which `worker/worker/tasks.py` turns into
-  `TransactionRow`s and inserts via `session.add_all`, the first phase that
-  writes into the `transactions` table rather than only mutating the
-  `Statement` row. Best-effort **per region**: one page's extraction failing
-  doesn't discard transactions already extracted from other pages. Currency
-  falls back to the document's own classified currency when a row leaves it
-  `null`. No new backend/frontend work needed — `GET /api/transactions` and
-  the `/transactions` page already existed as an empty sink. See
-  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 6" entry.
+- Nothing currently in flight. Last completed unit of work: Phase 7
+  transaction verification — `worker/worker/transaction_verification.py`'s
+  `TransactionVerificationService` checks each region's extraction against
+  that region's own content (text + optional image, via `_regions.py`'s new
+  `_region_content`) plus the extracted JSON, for missing/duplicate
+  transactions, wrong dates/amounts/signs, and split-or-merged multi-line
+  rows — closed schema `worker/worker/verification_issues.py`
+  (`VerificationIssue`/`TransactionVerification`). When invalid,
+  `TransactionExtractionService.extract` (which gained optional
+  `previous_attempt`/`verification_issues` params) is called again for that
+  region with the issues as correction feedback; the retry's output is
+  trusted and persisted whether or not it's still flagged — no
+  re-verification loop, one corrective attempt only. Best-effort throughout:
+  a verification failure just keeps the original extraction, a corrective
+  retry failure falls back to the pre-retry extraction. Every region's
+  *first* verification result is aggregated onto
+  `Statement.transaction_verification` (`JSONB`, migration `f6a7b8c9d0e1`),
+  exposed via a new `GET /api/statements/{id}/transaction-verification` and
+  shown on `/statements/analysis` via
+  `components/transaction-verification-view.tsx`. See
+  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 7" entry. Worker: 49
+  tests pass (`cd worker && poetry run pytest -q`); ruff clean. Backend: 51
+  tests pass (`cd backend && poetry run pytest -q`), migration applied.
+  Frontend: `tsc --noEmit` and `eslint src/` both clean.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not
   actually been run. Do that before relying on the containerized stack. (The
@@ -205,23 +208,25 @@ request-flow maps).
   reprocessing, but worth fixing before that becomes a feature.
 - **No OCR/vision exists.** `Statement.needs_ocr` gets set for scanned/image-only
   PDFs, but nothing acts on it yet — flagged only, not processed. Document
-  understanding, transaction region detection, schema discovery, and
-  transaction extraction are all skipped entirely for these too (see above).
-- **All four AI steps need `MODEL_API_KEY`** (or the `MODEL_PROVIDER`-specific
+  understanding, transaction region detection, schema discovery, extraction,
+  and verification are all skipped entirely for these too (see above).
+- **All five AI steps need `MODEL_API_KEY`** (or the `MODEL_PROVIDER`-specific
   `OPENROUTER_API_KEY`/`HUGGINGFACE_API_KEY` — see `worker/worker/config.py`).
   Without it, every PDF statement ingests fine but `document_analysis`/
-  `transaction_regions`/`transaction_schema` all stay `null` forever and no
-  `transactions` rows get inserted (a logged warning, not a crash). With the
-  default provider (Hugging Face), get a free token at hf.co/settings/tokens
-  (with "Make calls to Inference Providers" permission) and set it as
-  `HUGGINGFACE_API_KEY` (or `MODEL_API_KEY`) in `.env`. To benchmark or swap
-  models/providers, change `MODEL_PROVIDER`/`AI_MODEL` (and the matching
-  `<PROVIDER>_API_KEY`) — no code change needed, see
-  `worker/worker/ai_provider.py` (all four AI services share it). Also worth
-  knowing: the default is a free-tier 7B model, not a frontier one — expect it
-  to occasionally misclassify unusual statement formats, leave fields `null`,
-  return an imprecise region, a plausible-looking but wrong schema mapping, or
-  miss/misread some rows during extraction.
+  `transaction_regions`/`transaction_schema`/`transaction_verification` all
+  stay `null` forever and no `transactions` rows get inserted (a logged
+  warning, not a crash). With the default provider (Hugging Face), get a free
+  token at hf.co/settings/tokens (with "Make calls to Inference Providers"
+  permission) and set it as `HUGGINGFACE_API_KEY` (or `MODEL_API_KEY`) in
+  `.env`. To benchmark or swap models/providers, change `MODEL_PROVIDER`/
+  `AI_MODEL` (and the matching `<PROVIDER>_API_KEY`) — no code change needed,
+  see `worker/worker/ai_provider.py` (all five AI services share it). Also
+  worth knowing: the default is a free-tier 7B model, not a frontier one —
+  expect it to occasionally misclassify unusual statement formats, leave
+  fields `null`, return an imprecise region, a plausible-looking but wrong
+  schema mapping, miss/misread some rows during extraction, or return a
+  plausible-looking but wrong verification verdict (i.e. verification itself
+  isn't infallible — it's a best-effort second opinion, not ground truth).
 - **`REDIS_URL` in `.env` (`redis://redis:6379/0`) is a Docker Compose service
   hostname — it only resolves inside Docker's network.** Running the backend or the
   Celery worker locally (outside Docker, e.g. `uvicorn --reload` / `poetry run celery`
@@ -246,12 +251,12 @@ request-flow maps).
 
 - OCR/vision for scanned PDFs (`Statement.needs_ocr=true`) — detection exists,
   nothing consumes the flag yet, and document understanding/region detection/
-  schema discovery/transaction extraction are all skipped for these too. Also
+  schema discovery/extraction/verification are all skipped for these too. Also
   not yet scoped (which OCR engine/vision API, whether it produces the same
   `Page`/`text_blocks` shape or something else).
 - Transaction categorization (AI/merchant-based) and a full transaction-editing
-  UI — the `transactions` table now actually gets populated (Phase 6), so this
-  is the natural next consumer-facing feature.
+  UI — the `transactions` table now actually gets populated (Phase 6+7), so
+  this is the natural next consumer-facing feature.
 - Dedup/idempotency guard on statement reprocessing — see "Known broken" above.
 - Run the Docker build once Docker Desktop is available (see "In progress" above) —
   note the worker image will need to build `pydantic`/`openai` now too.

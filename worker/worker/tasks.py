@@ -16,6 +16,8 @@ from worker.transaction_region_detection import TransactionRegionDetectionServic
 from worker.transaction_regions import TransactionRegionDetection
 from worker.transaction_schema import TransactionSchemaDiscovery
 from worker.transaction_schema_discovery import TransactionSchemaDiscoveryService
+from worker.transaction_verification import TransactionVerificationService
+from worker.verification_issues import TransactionVerification
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +35,22 @@ def ping() -> str:
 
 @app.task(name="worker.parse_statement")
 def parse_statement(statement_id: str, signed_url: str) -> None:
-    """Phase 1+2+3+4+5+6: document ingestion, analysis, understanding,
-    transaction-region detection, transaction-schema discovery, and
-    transaction extraction. Downloads the stored file exactly as uploaded
-    (never modified), analyzes PDFs page-by-page (size, text, positioned text
-    blocks, image regions), flags scanned/image-only documents, classifies
-    what the document is (bank/credit-card statement, institution, period,
-    sections) via DocumentUnderstandingService, narrows the pages flagged
-    "transactions" down to an exact bounding region per page via
-    TransactionRegionDetectionService, figures out what a transaction record
-    actually looks like in this document (which columns map to which fields)
-    via TransactionSchemaDiscoveryService, then extracts every transaction
-    row region-by-region via TransactionExtractionService and inserts them
-    into the transactions table."""
+    """Phase 1+2+3+4+5+6+7: document ingestion, analysis, understanding,
+    transaction-region detection, transaction-schema discovery, transaction
+    extraction, and transaction verification. Downloads the stored file
+    exactly as uploaded (never modified), analyzes PDFs page-by-page (size,
+    text, positioned text blocks, image regions), flags scanned/image-only
+    documents, classifies what the document is (bank/credit-card statement,
+    institution, period, sections) via DocumentUnderstandingService, narrows
+    the pages flagged "transactions" down to an exact bounding region per
+    page via TransactionRegionDetectionService, figures out what a
+    transaction record actually looks like in this document (which columns
+    map to which fields) via TransactionSchemaDiscoveryService, extracts
+    every transaction row region-by-region via TransactionExtractionService,
+    checks each region's extraction against the region itself via
+    TransactionVerificationService (re-extracting once with the found issues
+    as correction feedback when invalid), then inserts the final rows into
+    the transactions table."""
     session = SessionLocal()
     try:
         stmt = session.get(StatementRow, uuid.UUID(statement_id))
@@ -153,6 +158,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         # must not discard transactions already extracted from other
         # regions, so each region gets its own try/except.
         extracted_rows: list[TransactionRow] = []
+        verification_reports: list[TransactionVerification] = []
         if transaction_schema and transaction_regions:
             for region in transaction_regions.transaction_regions:
                 try:
@@ -167,6 +173,46 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                         exc_info=True,
                     )
                     continue
+
+                # Verification is best-effort on top of an already-succeeded
+                # extraction: a failure here just means this region's
+                # extraction is used as-is, uncorrected. When verification
+                # does run and flags problems, extraction is retried once
+                # with those issues as correction feedback; that retry's
+                # output is trusted and persisted whether or not it's still
+                # flagged (no re-verification loop).
+                try:
+                    verification = TransactionVerificationService().verify(
+                        document, region, extraction
+                    )
+                except Exception:
+                    logger.warning(
+                        "statement %s: transaction verification failed for page %d",
+                        statement_id,
+                        region.page,
+                        exc_info=True,
+                    )
+                    verification = None
+
+                if verification is not None:
+                    verification_reports.append(verification)
+                    if not verification.valid:
+                        try:
+                            extraction = TransactionExtractionService().extract(
+                                document,
+                                region,
+                                transaction_schema.transaction_fields,
+                                previous_attempt=extraction,
+                                verification_issues=verification.issues,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "statement %s: corrective re-extraction failed for page %d",
+                                statement_id,
+                                region.page,
+                                exc_info=True,
+                            )
+
                 for txn in extraction.transactions:
                     extracted_rows.append(
                         TransactionRow(
@@ -196,6 +242,14 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         )
         stmt.transaction_schema = (
             transaction_schema.model_dump(mode="json") if transaction_schema else None
+        )
+        stmt.transaction_verification = (
+            TransactionVerification(
+                valid=all(report.valid for report in verification_reports),
+                issues=[issue for report in verification_reports for issue in report.issues],
+            ).model_dump(mode="json")
+            if verification_reports
+            else None
         )
         stmt.status = "ingested"
         session.add_all(extracted_rows)

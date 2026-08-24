@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from worker.document import Document, Page, TextBlock
+from worker.extracted_transactions import TransactionExtraction
 from worker.pdf_analysis import PAGE_IMAGE_RESOLUTION
 from worker.transaction_extraction import (
     TransactionExtractionError,
@@ -13,6 +14,7 @@ from worker.transaction_extraction import (
 )
 from worker.transaction_regions import TransactionRegion
 from worker.transaction_schema import TransactionFields
+from worker.verification_issues import VerificationIssue
 
 
 def _make_page_image(width_pt: float, height_pt: float) -> bytes:
@@ -135,6 +137,30 @@ def test_extract_includes_cropped_region_image_when_available() -> None:
 
     user_content = provider.calls[0][1]["content"]
     assert any(part["type"] == "image_url" for part in user_content)
+
+
+def test_extract_with_correction_appends_previous_attempt_and_issues() -> None:
+    provider = _FakeProvider([VALID_EXTRACTION_JSON])
+    service = TransactionExtractionService(provider=provider)
+    previous = TransactionExtraction.model_validate_json(VALID_EXTRACTION_JSON)
+    issues = [
+        VerificationIssue(type="wrong_amount", page=2, description="UBER TRIP amount should be -18.65"),
+    ]
+
+    service.extract(
+        _make_document(),
+        _make_region(),
+        _make_fields(),
+        previous_attempt=previous,
+        verification_issues=issues,
+    )
+
+    messages = provider.calls[0]
+    assert messages[2]["role"] == "assistant"
+    assert "UBER TRIP" in messages[2]["content"]
+    assert messages[3]["role"] == "user"
+    assert "wrong_amount" in messages[3]["content"]
+    assert "fixing every issue" in messages[3]["content"]
 
 
 def test_extract_retries_after_invalid_then_succeeds() -> None:
