@@ -28,4 +28,5 @@ class Statement(Base):
     pages: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     document_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     transaction_regions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    transaction_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

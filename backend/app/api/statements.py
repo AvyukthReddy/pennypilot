@@ -14,6 +14,7 @@ from app.schemas.statement import (
     StatementPagesRead,
     StatementRead,
     StatementTransactionRegionsRead,
+    StatementTransactionSchemaRead,
 )
 from app.services.storage import delete_statement, get_statement_view_url, upload_statement
 
@@ -153,6 +154,24 @@ def get_statement_transaction_regions(
         else None
     )
     return {"statement_id": statement.id, "transaction_regions": regions}
+
+
+@router.get(
+    "/api/statements/{statement_id}/transaction-schema",
+    response_model=StatementTransactionSchemaRead,
+)
+def get_statement_transaction_schema(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    fields = (
+        statement.transaction_schema["transaction_fields"]
+        if statement.transaction_schema
+        else None
+    )
+    return {"statement_id": statement.id, "transaction_fields": fields}
 
 
 @router.delete("/api/statements/{statement_id}")

@@ -80,13 +80,14 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `processing`, and renders `parse_error` under the status line once parsing
    finishes (or fails/warns) — see "Statement parsing" below.
 
-## Statement ingestion, analysis, understanding, and region detection (upload → Document, Phase 1+2+3+4 — no transaction parser yet)
+## Statement ingestion, analysis, understanding, region detection, and schema discovery (upload → Document, Phase 1+2+3+4+5 — no transaction parser yet)
 
 Earlier parsing-pipeline attempts (`worker/worker/parsing/`) were deleted entirely —
 never committed, so no history to preserve. See `docs/DECISIONS.md`'s "Statement
-parsing scoped down to Phase 1" entry. Transaction-line extraction (Phase 5) still
+parsing scoped down to Phase 1" entry. Transaction-line extraction (Phase 6) still
 doesn't exist — this covers ingestion, page/text extraction, document-level
-classification, and narrowing to transaction-table regions only.
+classification, narrowing to transaction-table regions, and discovering that
+table's own column layout only.
 
 1. In `upload_statement_file` (`backend/app/api/statements.py`), right after the
    `Statement` row is created: a SHA-256 `file_hash` of the uploaded bytes is checked
@@ -160,8 +161,27 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
    (including the `needs_ocr`/no-`document_analysis` cases from step 7). Persisted
    as `JSONB` (migration `d4e5f6a7b8c9`) in the same `session.commit()`. See
    `docs/DECISIONS.md`'s 2026-08-19 "Phase 4" entry.
+9. When `transaction_regions` is non-empty,
+   `worker/worker/transaction_schema_discovery.py`'s
+   `TransactionSchemaDiscoveryService.discover` answers "what does a
+   transaction look like in this document?" — for each detected region,
+   `_blocks_in_region` crops that page's `text_blocks` down to just the ones
+   inside the region (center-point test), all cropped regions are batched into
+   one prompt, and the reply is validated against the closed
+   `TransactionSchemaDiscovery` schema (`worker/worker/transaction_schema.py`)
+   — a `transaction_fields` mapping from `Transaction`'s fixed fields
+   (`transaction_date`/`post_date`/`description`/`amount`/`currency`) onto
+   this document's actual columns (`"column_N"`, positional labels the model
+   assigns itself). `amount` is a list, since a table with separate
+   Debit/Credit columns needs two source mappings, each tagged
+   `semantics: "debit"`/`"credit"`. Same `AIProvider`, same one-self-repair
+   -retry, same best-effort/non-fatal handling as steps 7–8 — a failure here
+   leaves `Statement.transaction_schema` as `null` without touching `status`.
+   Skipped entirely when there are no detected regions to examine. Persisted
+   as `JSONB` (migration `e5f6a7b8c9d0`) in the same `session.commit()`. See
+   `docs/DECISIONS.md`'s 2026-08-23 "Phase 5" entry.
 
-## Viewing extracted text blocks and document classification (statements page → document analysis)
+## Viewing extracted text blocks, document classification, detected regions, and discovered schema (statements page → document analysis)
 
 1. `components/statements-list.tsx` shows a "Text blocks" link per statement row when
    `status === "ingested"` and `content_type === "application/pdf"`, linking to
@@ -169,27 +189,34 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
 2. `frontend/src/app/statements/analysis/page.tsx` (server component, same auth-gate
    pattern as `/transactions`) renders, top to bottom:
    `components/document-analysis-summary.tsx`, `components/
-transaction-regions-view.tsx`, then `components/statement-pages-view.tsx`. The
-   summary card GETs `GET /api/statements/{id}/analysis` (`backend/app/api/
-statements.py`, same ownership check as `/view`/`/pages`) via
-   `statementsEndpoints.analysis`, showing `document_type`/institution/account/
-   currency/period plus a page-ranged section list — or "Not yet classified" when
-   `document_analysis` is `null` (still processing, or skipped for a scanned PDF).
-   The regions table GETs `GET /api/statements/{id}/transaction-regions` via
+transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`, then
+   `components/statement-pages-view.tsx`. The summary card GETs
+   `GET /api/statements/{id}/analysis` (`backend/app/api/statements.py`, same
+   ownership check as `/view`/`/pages`) via `statementsEndpoints.analysis`, showing
+   `document_type`/institution/account/currency/period plus a page-ranged section
+   list — or "Not yet classified" when `document_analysis` is `null` (still
+   processing, or skipped for a scanned PDF). The regions table GETs
+   `GET /api/statements/{id}/transaction-regions` via
    `statementsEndpoints.transactionRegions`, showing a page/region row per detected
-   region — or an explanatory empty state when `null`/empty. The text-blocks viewer
-   at the bottom GETs `GET /api/statements/{id}/pages` via
-   `statementsEndpoints.pages`.
+   region — or an explanatory empty state when `null`/empty. The schema table GETs
+   `GET /api/statements/{id}/transaction-schema` via
+   `statementsEndpoints.transactionSchema`, showing a target-field → source-column
+   row per discovered field (multiple rows for a split-amount `debit`/`credit`
+   table) — or an explanatory empty state when `null`. The text-blocks viewer at
+   the bottom GETs `GET /api/statements/{id}/pages` via `statementsEndpoints.pages`.
 3. The `/pages` route returns `{ statement_id, pages }` straight from
    `Statement.pages` (`[]` if analysis hasn't finished/isn't a PDF) — validated
-   against `StatementPagesRead`/`PageRead`/`TextBlockRead`; the
-   `/transaction-regions` route returns `{ statement_id, transaction_regions }`
-   from `Statement.transaction_regions` (unwrapping the persisted
+   against `StatementPagesRead`/`PageRead`/`TextBlockRead`; `/transaction-regions`
+   returns `{ statement_id, transaction_regions }` from
+   `Statement.transaction_regions` (unwrapping the persisted
    `{"transaction_regions": [...]}` shape), validated against
-   `StatementTransactionRegionsRead`/`TransactionRegionRead` (all in
-   `backend/app/schemas/statement.py`). Neither is folded into `StatementRead`
-   (used by the statements list) — both can be much larger than everything else
-   in that response.
+   `StatementTransactionRegionsRead`/`TransactionRegionRead`; `/transaction-schema`
+   returns `{ statement_id, transaction_fields }` from
+   `Statement.transaction_schema` (unwrapping `{"transaction_fields": {...}}`),
+   validated against `StatementTransactionSchemaRead`/`TransactionFieldsRead`/
+   `FieldSourceRead` (all in `backend/app/schemas/statement.py`). None of these
+   are folded into `StatementRead` (used by the statements list) — each can be
+   much larger than everything else in that response.
 4. Each page in the text-blocks viewer renders as a collapsible `<details>` (first
    page open, rest collapsed) with a table of `text_blocks` —
    `x`/`y`/`width`/`height`/`text`.
@@ -197,13 +224,14 @@ statements.py`, same ownership check as `/view`/`/pages`) via
 ## Not yet wired
 
 - **Transaction-line parsing.** `worker/worker/tasks.py` has a
-  `# TODO(phase 5): hand document (+ document_analysis + transaction_regions) to
-a real transaction-line parser here.` marker at the exact seam — it now has the
-  extracted `Document`, its `DocumentAnalysis` classification, and detected
-  `TransactionRegionDetection` bounding boxes to work with, not just raw text. The
-  `transactions` table/model/API (`GET /api/transactions`) and frontend Transactions
-  page all exist and work — they just have nothing to display until a parser
-  populates them.
+  `# TODO(phase 6): hand document (+ document_analysis + transaction_regions +
+  transaction_schema) to a real transaction-line parser here.` marker at the
+  exact seam — it now has the extracted `Document`, its `DocumentAnalysis`
+  classification, detected `TransactionRegionDetection` bounding boxes, *and*
+  the discovered `TransactionSchemaDiscovery` column mapping to work with, not
+  just raw text. The `transactions` table/model/API (`GET /api/transactions`)
+  and frontend Transactions page all exist and work — they just have nothing
+  to display until a parser populates them.
 - Transaction categorization (AI/merchant-based) and a full transaction-editing UI —
   depend on parsing existing first.
 - OCR/vision for scanned PDFs (`needs_ocr=true`) — still detection-only; document

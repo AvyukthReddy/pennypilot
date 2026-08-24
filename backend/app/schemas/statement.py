@@ -77,3 +77,21 @@ class TransactionRegionRead(BaseModel):
 class StatementTransactionRegionsRead(BaseModel):
     statement_id: uuid.UUID
     transaction_regions: list[TransactionRegionRead] | None
+
+
+class FieldSourceRead(BaseModel):
+    source: str
+    semantics: Literal["debit", "credit", "amount"] | None = None
+
+
+class TransactionFieldsRead(BaseModel):
+    transaction_date: FieldSourceRead
+    post_date: FieldSourceRead | None = None
+    description: FieldSourceRead
+    amount: list[FieldSourceRead]
+    currency: FieldSourceRead | None = None
+
+
+class StatementTransactionSchemaRead(BaseModel):
+    statement_id: uuid.UUID
+    transaction_fields: TransactionFieldsRead | None

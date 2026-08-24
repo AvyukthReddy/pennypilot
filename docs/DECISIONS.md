@@ -4,6 +4,55 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-23 — Phase 5: transaction schema discovery
+
+Phase 4's `TransactionRegionDetection` already narrows each transaction-flagged
+page down to an exact bounding region. Phase 5 answers the next question before
+any real line-item extraction: **what does a transaction look like in *this*
+document?** Different banks lay out wildly different tables (`Date | Description
+| Amount` vs. `Transaction Date | Posting Date | Description | Debit | Credit |
+Balance` vs. something never seen before) — instead of `if bank == "Chase":
+...`, new `worker/worker/transaction_schema.py`'s `TransactionSchemaDiscovery`
+asks the model to map whatever columns this document actually has onto
+`Transaction`'s fixed fields (`backend/app/models/transaction.py`):
+`transaction_date`, `post_date`, `description`, `amount`, `currency`.
+
+**`amount` is `list[FieldSource]`, not a single one.** A table with separate
+Debit/Credit columns can't source one target field from one column — it needs
+two `FieldSource` entries, each tagged `semantics: "debit"`/`"credit"`, so a
+later real parser can combine them (subtract/sign) instead of losing a column.
+`transaction_date`/`description` stay single required fields; `post_date`/
+`currency` are optional singles, matching `Transaction`'s own nullability.
+
+**`source` is a positional label (`"column_N"`) the model assigns itself**, left
+to right from the coordinate-tagged text blocks it's shown — same approach as
+Phase 4 (reason over `[x, y, width, height]` blocks directly, no pre-computed
+column-clustering heuristic on our side).
+
+**Feeds text blocks cropped to the *detected region*, not the whole flagged
+page** — new `_blocks_in_region` helper
+(`worker/worker/transaction_schema_discovery.py`) filters a page's
+`text_blocks` to those whose center point falls inside its Phase-4-detected
+region box (center-point test, not strict containment, so a block that
+slightly straddles the boundary isn't dropped). This is the actual payoff of
+Phase 4's narrowing — Phase 4 itself still fed whole-page blocks since it
+didn't know the region yet.
+
+**Reuses Phase 3/4's pattern wholesale** — same `AIProvider`, same
+closed-schema + self-repair-retry (`worker/worker/_ai_json.py`), same
+best-effort/non-fatal handling (a failure leaves `transaction_schema` as
+`null`, never fails the statement), same "schema describes the answer's shape,
+it's not the answer" prompt clarification from the previous commit. Skipped
+entirely when `transaction_regions` is empty/`null` — inherits the skip chain
+from Phases 3+4 for free. Persisted as `Statement.transaction_schema`
+(nullable `JSONB`, migration `e5f6a7b8c9d0`), exposed via a new
+`GET /api/statements/{id}/transaction-schema`, and shown as a fourth section
+on `/statements/analysis`.
+
+`worker/worker/tasks.py`'s TODO marker moved from `phase 5` to `phase 6` — the
+still-unbuilt transaction-line parser now has `document`, `document_analysis`,
+`transaction_regions`, *and* `transaction_schema` to work with.
+
 ## 2026-08-19 — Phase 4: transaction region detection
 
 Phase 3's `DocumentAnalysis.sections` already says *which pages* hold what (e.g.
