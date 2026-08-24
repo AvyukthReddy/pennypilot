@@ -1,13 +1,21 @@
 import io
+import logging
 
 import pdfplumber
 
 from worker.document import ImageRegion, Page, TextBlock
 
+logger = logging.getLogger(__name__)
+
 # Below this average characters-per-page, treat the PDF as scanned/image-only
 # rather than text-based. Real statements clear this by 10-100x; a truly
 # blank or image-only page won't.
 SCANNED_TEXT_THRESHOLD = 20
+
+# DPI used to rasterize each page for AI services that benefit from seeing
+# the actual visual layout (transaction region detection, extraction) — not
+# persisted anywhere, so this is purely an inference-time resolution choice.
+PAGE_IMAGE_RESOLUTION = 100
 
 
 def analyze_pdf(data: bytes) -> list[Page]:
@@ -35,6 +43,14 @@ def analyze_pdf(data: bytes) -> list[Page]:
                 )
                 for image in page.images
             ]
+            rendered_image: bytes | None = None
+            try:
+                buf = io.BytesIO()
+                page.to_image(resolution=PAGE_IMAGE_RESOLUTION).original.save(buf, format="PNG")
+                rendered_image = buf.getvalue()
+            except Exception:
+                logger.warning("page %d: failed to render page image", index, exc_info=True)
+
             pages.append(
                 Page(
                     page_number=index,
@@ -43,6 +59,7 @@ def analyze_pdf(data: bytes) -> list[Page]:
                     text=page.extract_text() or "",
                     text_blocks=text_blocks,
                     images=images,
+                    image=rendered_image,
                 )
             )
     return pages

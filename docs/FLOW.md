@@ -80,14 +80,13 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `processing`, and renders `parse_error` under the status line once parsing
    finishes (or fails/warns) — see "Statement parsing" below.
 
-## Statement ingestion, analysis, understanding, region detection, and schema discovery (upload → Document, Phase 1+2+3+4+5 — no transaction parser yet)
+## Statement ingestion, analysis, understanding, region detection, schema discovery, and transaction extraction (upload → Document → transactions, Phase 1+2+3+4+5+6)
 
 Earlier parsing-pipeline attempts (`worker/worker/parsing/`) were deleted entirely —
 never committed, so no history to preserve. See `docs/DECISIONS.md`'s "Statement
-parsing scoped down to Phase 1" entry. Transaction-line extraction (Phase 6) still
-doesn't exist — this covers ingestion, page/text extraction, document-level
-classification, narrowing to transaction-table regions, and discovering that
-table's own column layout only.
+parsing scoped down to Phase 1" entry. This covers ingestion, page/text extraction,
+document-level classification, narrowing to transaction-table regions, discovering
+each region's column layout, and finally extracting every transaction row.
 
 1. In `upload_statement_file` (`backend/app/api/statements.py`), right after the
    `Statement` row is created: a SHA-256 `file_hash` of the uploaded bytes is checked
@@ -111,7 +110,10 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
 3. For PDFs, `worker/worker/pdf_analysis.py`'s `analyze_pdf` (via `pdfplumber`) opens
    the file and returns one `Page` per page (`worker/worker/document.py`): `width`/
    `height`, full `text`, line-grouped `text_blocks` (`text`/`x`/`y`/`width`/`height`
-   each), and `images` (bounding boxes only). An unreadable/corrupt PDF ⇒
+   each), `images` (bounding boxes only), and a rendered `image` (a PNG raster of the
+   whole page, at `PAGE_IMAGE_RESOLUTION` — `None` if rendering fails for that page;
+   kept in-memory only, never persisted — see step 8/10 and `docs/DECISIONS.md`'s
+   2026-08-24 "Phase 6 follow-up" entry). An unreadable/corrupt PDF ⇒
    `status="failed"`. CSVs skip this — `pages` stays `[]`, page count is `None`.
    `is_scanned(pages)` then flags `needs_ocr` when a PDF's average
    characters-per-page falls below a small threshold — a scanned/image-only document
@@ -149,18 +151,22 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
 8. When `document_analysis` exists and has a `sections` entry with
    `type == "transactions"`, `worker/worker/transaction_region_detection.py`'s
    `TransactionRegionDetectionService.detect` narrows further: only the pages in
-   that section are examined (`_candidate_pages`), their `text_blocks` (with
+   that section are examined (`_candidate_pages`), and one user message per
+   flagged page is sent within a single call — each page's `text_blocks` (with
    `x`/`y`/`width`/`height` this time, not just flat text — naming a bounding
-   region needs layout) are batched into one prompt/response covering every
-   flagged page at once, and the reply is validated against the closed
-   `TransactionRegionDetection` schema (`worker/worker/transaction_regions.py`) —
-   one `[x0, y0, x1, y1]` region per page. Same `AIProvider`, same one-self-repair
-   -retry, same best-effort/non-fatal handling as step 7 — a failure here leaves
+   region needs layout) as a text part, plus that page's rendered image
+   (`Page.image`, when available) as an `image_url` part, so the model can
+   visually cross-check the region it picks. The reply is validated against
+   the closed `TransactionRegionDetection` schema
+   (`worker/worker/transaction_regions.py`) — one `[x0, y0, x1, y1]` region
+   per page. Same `AIProvider`, same one-self-repair-retry, same
+   best-effort/non-fatal handling as step 7 — a failure here leaves
    `Statement.transaction_regions` as `null` without touching `status`. Skipped
    entirely (no call made) when there's no `"transactions"` section to narrow
    (including the `needs_ocr`/no-`document_analysis` cases from step 7). Persisted
    as `JSONB` (migration `d4e5f6a7b8c9`) in the same `session.commit()`. See
-   `docs/DECISIONS.md`'s 2026-08-19 "Phase 4" entry.
+   `docs/DECISIONS.md`'s 2026-08-19 "Phase 4" and 2026-08-24 "Phase 6
+   follow-up" entries.
 9. When `transaction_regions` is non-empty,
    `worker/worker/transaction_schema_discovery.py`'s
    `TransactionSchemaDiscoveryService.discover` answers "what does a
@@ -180,6 +186,33 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
    Skipped entirely when there are no detected regions to examine. Persisted
    as `JSONB` (migration `e5f6a7b8c9d0`) in the same `session.commit()`. See
    `docs/DECISIONS.md`'s 2026-08-23 "Phase 5" entry.
+10. When `transaction_schema` was discovered,
+    `worker/worker/transaction_extraction.py`'s
+    `TransactionExtractionService.extract` runs **once per detected region**
+    (not once per document, unlike steps 7-9) — each call crops just that
+    page's `text_blocks` down to its region (`worker/worker/_regions.py`'s
+    `_blocks_in_region`) as a text part, plus (via that same module's
+    `_image_for_region`) the region cropped out of `Page.image` as an
+    `image_url` part when available, so the model can visually cross-check
+    row values the text extraction might have gotten wrong (misaligned
+    columns, merged cells). The call is also prompted with the Phase 5
+    column mapping for the whole document, so the model knows which column
+    means what without re-deriving it per page. The reply is validated
+    against the closed `TransactionExtraction` schema
+    (`worker/worker/extracted_transactions.py`) — a list of
+    `transaction_date`/`post_date`/`description`/`amount`/`currency` rows,
+    nothing else (no category, no prose). Same `AIProvider`, same
+    one-self-repair-retry as steps 7-9, but best-effort **per region**: one
+    page's extraction failing doesn't discard transactions already
+    extracted from other pages. A row's `currency` falls back to
+    `document_analysis.currency` when the model leaves it `null`. Every
+    successfully extracted row becomes a `TransactionRow`
+    (`worker/worker/models.py`) and all of them are `session.add_all`'d
+    alongside the existing `session.commit()` — the first phase that writes
+    new rows into the `transactions` table rather than only mutating the
+    `Statement` row. Skipped entirely when there's no `transaction_schema`.
+    See `docs/DECISIONS.md`'s 2026-08-24 "Phase 6" and "Phase 6 follow-up"
+    entries.
 
 ## Viewing extracted text blocks, document classification, detected regions, and discovered schema (statements page → document analysis)
 
@@ -223,16 +256,12 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`, then
 
 ## Not yet wired
 
-- **Transaction-line parsing.** `worker/worker/tasks.py` has a
-  `# TODO(phase 6): hand document (+ document_analysis + transaction_regions +
-  transaction_schema) to a real transaction-line parser here.` marker at the
-  exact seam — it now has the extracted `Document`, its `DocumentAnalysis`
-  classification, detected `TransactionRegionDetection` bounding boxes, *and*
-  the discovered `TransactionSchemaDiscovery` column mapping to work with, not
-  just raw text. The `transactions` table/model/API (`GET /api/transactions`)
-  and frontend Transactions page all exist and work — they just have nothing
-  to display until a parser populates them.
-- Transaction categorization (AI/merchant-based) and a full transaction-editing UI —
-  depend on parsing existing first.
+- Transaction categorization (AI/merchant-based) and a full transaction-editing UI.
+- No dedup/idempotency guard on statement reprocessing: re-running
+  `worker.parse_statement` on an already-`"ingested"` statement inserts a
+  second set of `transactions` rows rather than replacing the first — the
+  JSONB columns (`pages`/`document_analysis`/etc.) already overwrite cleanly
+  on reprocessing, `transactions` rows don't yet. See `docs/DECISIONS.md`'s
+  2026-08-24 "Phase 6" entry.
 - OCR/vision for scanned PDFs (`needs_ocr=true`) — still detection-only; document
   understanding is skipped for these, not just transaction parsing.

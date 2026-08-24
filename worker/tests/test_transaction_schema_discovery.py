@@ -7,7 +7,6 @@ from worker.transaction_regions import TransactionRegionDetection
 from worker.transaction_schema_discovery import (
     TransactionSchemaDiscoveryError,
     TransactionSchemaDiscoveryService,
-    _blocks_in_region,
 )
 
 
@@ -78,14 +77,6 @@ VALID_SPLIT_SCHEMA_JSON = json.dumps(
         }
     }
 )
-
-
-def test_blocks_in_region_crops_to_center_point() -> None:
-    page = Page(page_number=1, width=612, height=792, text="", text_blocks=[HEADER_BLOCK, ROW_BLOCK], images=[])
-
-    result = _blocks_in_region(page, (45, 180, 570, 730))
-
-    assert result == [ROW_BLOCK]
 
 
 def test_discover_valid_json_first_try() -> None:

@@ -1,11 +1,13 @@
 import io
 import uuid
+from decimal import Decimal
 
 import httpx
 from reportlab.pdfgen import canvas
 
 import worker.tasks as tasks
 from worker.document_analysis import DocumentAnalysis
+from worker.extracted_transactions import TransactionExtraction
 from worker.models import StatementRow
 from worker.transaction_regions import TransactionRegionDetection
 from worker.transaction_schema import TransactionSchemaDiscovery
@@ -39,6 +41,19 @@ VALID_SCHEMA = TransactionSchemaDiscovery(
         "amount": [{"source": "column_3"}],
     },
 )
+
+VALID_EXTRACTION = TransactionExtraction(
+    transactions=[
+        {
+            "transaction_date": "2026-07-14",
+            "description": "STARBUCKS #2938",
+            "amount": -7.42,
+            "currency": "USD",
+        },
+    ],
+)
+
+EMPTY_EXTRACTION = TransactionExtraction(transactions=[])
 
 
 class _FakeUnderstandingService:
@@ -127,15 +142,61 @@ def _patch_schema_discovery(monkeypatch, result=None, error=None):
     return calls
 
 
+class _FakeExtractionService:
+    """Stand-in for TransactionExtractionService — no real network call.
+    `results_by_page` lets a test vary the outcome per region (e.g. one page
+    succeeds, another raises), falling back to a single `result`/`error` for
+    every region when not given."""
+
+    def __init__(
+        self,
+        calls: list,
+        result: TransactionExtraction | None = None,
+        error: Exception | None = None,
+        results_by_page: dict | None = None,
+    ):
+        self._calls = calls
+        self._result = result
+        self._error = error
+        self._results_by_page = results_by_page or {}
+
+    def extract(self, document, region, transaction_fields):
+        self._calls.append((document, region, transaction_fields))
+        if region.page in self._results_by_page:
+            outcome = self._results_by_page[region.page]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        if self._error:
+            raise self._error
+        return self._result
+
+
+def _patch_extraction(monkeypatch, result=None, error=None, results_by_page=None):
+    calls: list = []
+    monkeypatch.setattr(
+        tasks,
+        "TransactionExtractionService",
+        lambda: _FakeExtractionService(
+            calls, result=result, error=error, results_by_page=results_by_page
+        ),
+    )
+    return calls
+
+
 class FakeTaskSession:
     def __init__(self, statement: StatementRow) -> None:
         self.statement = statement
         self.rolled_back = False
+        self.added: list = []
 
     def get(self, model, pk):
         if model is StatementRow and pk == self.statement.id:
             return self.statement
         return None
+
+    def add_all(self, rows) -> None:
+        self.added.extend(rows)
 
     def commit(self) -> None:
         pass
@@ -198,8 +259,9 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     calls = _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
     region_calls = _patch_region_detection(monkeypatch, result=VALID_REGIONS)
     schema_calls = _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    extraction_calls = _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
 
-    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
 
     assert statement.status == "ingested"
     assert statement.page_count == 3
@@ -212,6 +274,8 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert first_page["page_number"] == 1
     assert first_page["text_blocks"]
     assert first_page["text_blocks"][0]["text"] == "07/14/2026 Coffee and pastries $5.75"
+    # Real page images are rendered during analyze_pdf, but never persisted.
+    assert "image" not in first_page
 
     assert len(calls) == 1
     assert statement.document_analysis["document_type"] == "bank_statement"
@@ -225,6 +289,15 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
         statement.transaction_schema["transaction_fields"]["transaction_date"]["source"]
         == "column_1"
     )
+
+    assert len(extraction_calls) == 1
+    assert len(session.added) == 1
+    row = session.added[0]
+    assert row.statement_id == statement.id
+    assert row.user_id == statement.user_id
+    assert row.description == "STARBUCKS #2938"
+    assert row.amount == Decimal("-7.42")
+    assert row.currency == "USD"
 
 
 def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch) -> None:
@@ -273,12 +346,16 @@ def test_parse_statement_schema_discovery_failure_is_non_fatal(monkeypatch) -> N
     _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
     _patch_region_detection(monkeypatch, result=VALID_REGIONS)
     _patch_schema_discovery(monkeypatch, error=RuntimeError("model unreachable"))
+    extraction_calls = _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
 
-    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
 
     assert statement.status == "ingested"
     assert statement.transaction_regions is not None
     assert statement.transaction_schema is None
+    # No transaction_schema at all ⇒ extraction is never reached.
+    assert extraction_calls == []
+    assert session.added == []
 
 
 def test_parse_statement_skips_schema_discovery_without_regions(monkeypatch) -> None:
@@ -331,6 +408,55 @@ def test_parse_statement_csv_happy_path(monkeypatch) -> None:
     assert statement.parser_version == tasks.INGESTION_VERSION
     assert statement.needs_ocr is False
     assert statement.pages == []
+
+
+def test_parse_statement_extraction_partial_failure_keeps_other_regions(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    two_regions = TransactionRegionDetection(
+        transaction_regions=[
+            {"page": 1, "region": [45, 180, 570, 730]},
+            {"page": 2, "region": [45, 180, 570, 730]},
+        ],
+    )
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=two_regions)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    extraction_calls = _patch_extraction(
+        monkeypatch,
+        results_by_page={1: RuntimeError("model unreachable"), 2: VALID_EXTRACTION},
+    )
+
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert len(extraction_calls) == 2
+    # Page 1's failure doesn't discard page 2's already-extracted transaction.
+    assert len(session.added) == 1
+    assert session.added[0].description == "STARBUCKS #2938"
+
+
+def test_parse_statement_extraction_currency_falls_back_to_document_analysis(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    no_currency_extraction = TransactionExtraction(
+        transactions=[
+            {
+                "transaction_date": "2026-07-14",
+                "description": "STARBUCKS #2938",
+                "amount": -7.42,
+                "currency": None,
+            },
+        ],
+    )
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    _patch_extraction(monkeypatch, result=no_currency_extraction)
+
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert len(session.added) == 1
+    assert session.added[0].currency == VALID_ANALYSIS.currency == "USD"
 
 
 def test_parse_statement_download_failure_redacts_message(monkeypatch) -> None:

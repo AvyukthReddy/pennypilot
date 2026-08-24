@@ -32,6 +32,10 @@ class Page:
     text: str
     text_blocks: list[TextBlock]
     images: list[ImageRegion]
+    # A rendered raster (PNG) of the whole page, at PAGE_IMAGE_RESOLUTION (see
+    # pdf_analysis.py) — None if rendering failed for this page. Kept
+    # in-memory only; never persisted to Statement.pages.
+    image: bytes | None = None
 
 
 @dataclass
