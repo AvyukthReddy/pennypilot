@@ -4,6 +4,70 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-24 — Phase 6: transaction extraction (real transaction-line parser)
+
+Closes the loop Phases 3-5 set up: Phase 3 flags which pages hold a
+`"transactions"` section, Phase 4 narrows each to an exact bounding region,
+Phase 5 discovers which column in that region means which field. Phase 6
+actually reads the rows. New `worker/worker/extracted_transactions.py`:
+`ExtractedTransaction` (`transaction_date`, `post_date`, `description`,
+`amount`, `currency` — exactly `Transaction`'s own columns, no `category`, no
+extras) and `TransactionExtraction` (`transactions: list[...]`).
+
+**One AI call per detected region, not one per document** — the first phase to
+break from Phases 4/5's "batch everything into one call" pattern, per the
+user's explicit spec: each flagged page's region is extracted independently
+(`Page 2 region → AI call → transactions 1-42`, `Page 3 region → AI call →
+transactions 43-91`, ...). New `worker/worker/transaction_extraction.py`'s
+`TransactionExtractionService.extract(document, region, transaction_fields) ->
+TransactionExtraction` takes one `TransactionRegion` at a time, plus the Phase
+5 `TransactionFields` mapping for the whole document — the model is told which
+column means what instead of re-deriving it per page. Same `AIProvider`,
+closed-schema + one self-repair retry, and "schema describes the answer's
+shape, it's not the answer" prompt wording as every other AI service in this
+pipeline.
+
+**`_blocks_in_region` moved out of `transaction_schema_discovery.py` into new
+`worker/worker/_regions.py`** (mirrors the `_ai_json.py` shared-helper
+convention) — Phase 6 needs the identical center-point crop per region, so a
+second copy would just be duplication. Behavior unchanged; only the import
+site moved.
+
+**Per-region try/except in `tasks.py`, not one around the whole loop.** One
+page's extraction failing after retries (bad JSON, network blip) must not
+discard transactions already extracted from other pages — this is the first
+phase operating over a *list* of regions rather than one document-level
+answer, so the granularity of "best-effort" moved from per-document to
+per-region.
+
+**Currency falls back to `document_analysis.currency`** when a row's own
+`currency` comes back `null` — the document-level currency Phase 3 already
+classified is a reasonable default for a statement where every transaction
+shares one currency.
+
+**Guarded on `transaction_schema` being present** (need the column mapping to
+extract meaningfully) — inherits the "no regions" skip for free, since
+`transaction_schema` is itself only ever set when `transaction_regions` is
+non-empty.
+
+**No new backend or frontend work.** `GET /api/transactions`
+(`backend/app/api/transactions.py`) already filters by `statement_id` and
+paginates; `frontend/src/app/transactions/` already renders whatever's in the
+table. `TransactionRow` (`worker/worker/models.py`) already has every field
+this phase needs — this is the first phase to actually `session.add_all(...)`
+rows into it rather than just mutating the `Statement` row.
+
+**Deliberately out of scope**: no dedup/idempotency guard on reprocessing a
+statement (re-running `parse_statement` on an already-ingested statement will
+insert duplicate transaction rows — same "reprocessing overwrites" model the
+JSONB columns already have, just not yet extended to a normal table);
+`raw_row` stays unpopulated (not part of the user's strict schema);
+`Statement.status` stays `"ingested"`, no new `"parsed"` status introduced;
+`INGESTION_VERSION` stays unchanged (wasn't bumped for Phases 3-5 either).
+
+`worker/worker/tasks.py`'s `# TODO(phase 6)` marker is gone — this was the
+seam it named.
+
 ## 2026-08-23 — Phase 5: transaction schema discovery
 
 Phase 4's `TransactionRegionDetection` already narrows each transaction-flagged

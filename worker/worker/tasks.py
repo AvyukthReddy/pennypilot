@@ -9,8 +9,9 @@ from worker.db import SessionLocal
 from worker.document import Document, Page
 from worker.document_analysis import DocumentAnalysis
 from worker.document_understanding import DocumentUnderstandingService
-from worker.models import StatementRow
+from worker.models import StatementRow, TransactionRow
 from worker.pdf_analysis import analyze_pdf, is_scanned
+from worker.transaction_extraction import TransactionExtractionService
 from worker.transaction_region_detection import TransactionRegionDetectionService
 from worker.transaction_regions import TransactionRegionDetection
 from worker.transaction_schema import TransactionSchemaDiscovery
@@ -32,18 +33,19 @@ def ping() -> str:
 
 @app.task(name="worker.parse_statement")
 def parse_statement(statement_id: str, signed_url: str) -> None:
-    """Phase 1+2+3+4+5: document ingestion, analysis, understanding,
-    transaction-region detection, and transaction-schema discovery. Downloads
-    the stored file exactly as uploaded (never modified), analyzes PDFs
-    page-by-page (size, text, positioned text blocks, image regions), flags
-    scanned/image-only documents, classifies what the document is
-    (bank/credit-card statement, institution, period, sections) via
-    DocumentUnderstandingService, narrows the pages flagged "transactions"
-    down to an exact bounding region per page via
-    TransactionRegionDetectionService, then figures out what a transaction
-    record actually looks like in this document (which columns map to which
-    fields) via TransactionSchemaDiscoveryService. No transaction-line parser
-    exists yet; status lands on "ingested", not "parsed"."""
+    """Phase 1+2+3+4+5+6: document ingestion, analysis, understanding,
+    transaction-region detection, transaction-schema discovery, and
+    transaction extraction. Downloads the stored file exactly as uploaded
+    (never modified), analyzes PDFs page-by-page (size, text, positioned text
+    blocks, image regions), flags scanned/image-only documents, classifies
+    what the document is (bank/credit-card statement, institution, period,
+    sections) via DocumentUnderstandingService, narrows the pages flagged
+    "transactions" down to an exact bounding region per page via
+    TransactionRegionDetectionService, figures out what a transaction record
+    actually looks like in this document (which columns map to which fields)
+    via TransactionSchemaDiscoveryService, then extracts every transaction
+    row region-by-region via TransactionExtractionService and inserts them
+    into the transactions table."""
     session = SessionLocal()
     try:
         stmt = session.get(StatementRow, uuid.UUID(statement_id))
@@ -144,9 +146,40 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                     statement_id,
                     exc_info=True,
                 )
-        # TODO(phase 6): hand `document` (+ document_analysis +
-        # transaction_regions + transaction_schema) to a real transaction-line
-        # parser here.
+        # Extraction runs once per detected region (i.e. once per flagged
+        # page), not once per document — each call only needs that page's
+        # cropped blocks plus the column mapping Phase 5 already discovered.
+        # A single region failing (bad JSON after retries, network blip)
+        # must not discard transactions already extracted from other
+        # regions, so each region gets its own try/except.
+        extracted_rows: list[TransactionRow] = []
+        if transaction_schema and transaction_regions:
+            for region in transaction_regions.transaction_regions:
+                try:
+                    extraction = TransactionExtractionService().extract(
+                        document, region, transaction_schema.transaction_fields
+                    )
+                except Exception:
+                    logger.warning(
+                        "statement %s: transaction extraction failed for page %d",
+                        statement_id,
+                        region.page,
+                        exc_info=True,
+                    )
+                    continue
+                for txn in extraction.transactions:
+                    extracted_rows.append(
+                        TransactionRow(
+                            statement_id=stmt.id,
+                            user_id=stmt.user_id,
+                            transaction_date=txn.transaction_date,
+                            post_date=txn.post_date,
+                            description=txn.description,
+                            amount=txn.amount,
+                            currency=txn.currency
+                            or (document_analysis.currency if document_analysis else None),
+                        )
+                    )
 
         stmt.page_count = page_count
         stmt.parser_version = INGESTION_VERSION
@@ -162,6 +195,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
             transaction_schema.model_dump(mode="json") if transaction_schema else None
         )
         stmt.status = "ingested"
+        session.add_all(extracted_rows)
         session.commit()
     except Exception as exc:
         session.rollback()
