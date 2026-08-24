@@ -110,7 +110,10 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
 3. For PDFs, `worker/worker/pdf_analysis.py`'s `analyze_pdf` (via `pdfplumber`) opens
    the file and returns one `Page` per page (`worker/worker/document.py`): `width`/
    `height`, full `text`, line-grouped `text_blocks` (`text`/`x`/`y`/`width`/`height`
-   each), and `images` (bounding boxes only). An unreadable/corrupt PDF ⇒
+   each), `images` (bounding boxes only), and a rendered `image` (a PNG raster of the
+   whole page, at `PAGE_IMAGE_RESOLUTION` — `None` if rendering fails for that page;
+   kept in-memory only, never persisted — see step 8/10 and `docs/DECISIONS.md`'s
+   2026-08-24 "Phase 6 follow-up" entry). An unreadable/corrupt PDF ⇒
    `status="failed"`. CSVs skip this — `pages` stays `[]`, page count is `None`.
    `is_scanned(pages)` then flags `needs_ocr` when a PDF's average
    characters-per-page falls below a small threshold — a scanned/image-only document
@@ -148,18 +151,22 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
 8. When `document_analysis` exists and has a `sections` entry with
    `type == "transactions"`, `worker/worker/transaction_region_detection.py`'s
    `TransactionRegionDetectionService.detect` narrows further: only the pages in
-   that section are examined (`_candidate_pages`), their `text_blocks` (with
+   that section are examined (`_candidate_pages`), and one user message per
+   flagged page is sent within a single call — each page's `text_blocks` (with
    `x`/`y`/`width`/`height` this time, not just flat text — naming a bounding
-   region needs layout) are batched into one prompt/response covering every
-   flagged page at once, and the reply is validated against the closed
-   `TransactionRegionDetection` schema (`worker/worker/transaction_regions.py`) —
-   one `[x0, y0, x1, y1]` region per page. Same `AIProvider`, same one-self-repair
-   -retry, same best-effort/non-fatal handling as step 7 — a failure here leaves
+   region needs layout) as a text part, plus that page's rendered image
+   (`Page.image`, when available) as an `image_url` part, so the model can
+   visually cross-check the region it picks. The reply is validated against
+   the closed `TransactionRegionDetection` schema
+   (`worker/worker/transaction_regions.py`) — one `[x0, y0, x1, y1]` region
+   per page. Same `AIProvider`, same one-self-repair-retry, same
+   best-effort/non-fatal handling as step 7 — a failure here leaves
    `Statement.transaction_regions` as `null` without touching `status`. Skipped
    entirely (no call made) when there's no `"transactions"` section to narrow
    (including the `needs_ocr`/no-`document_analysis` cases from step 7). Persisted
    as `JSONB` (migration `d4e5f6a7b8c9`) in the same `session.commit()`. See
-   `docs/DECISIONS.md`'s 2026-08-19 "Phase 4" entry.
+   `docs/DECISIONS.md`'s 2026-08-19 "Phase 4" and 2026-08-24 "Phase 6
+   follow-up" entries.
 9. When `transaction_regions` is non-empty,
    `worker/worker/transaction_schema_discovery.py`'s
    `TransactionSchemaDiscoveryService.discover` answers "what does a
@@ -184,11 +191,14 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
     `TransactionExtractionService.extract` runs **once per detected region**
     (not once per document, unlike steps 7-9) — each call crops just that
     page's `text_blocks` down to its region (`worker/worker/_regions.py`'s
-    `_blocks_in_region`, moved out of `transaction_schema_discovery.py` so
-    both steps share it) and is prompted with the Phase 5 column mapping
-    for the whole document, so the model knows which column means what
-    without re-deriving it per page. The reply is validated against the
-    closed `TransactionExtraction` schema
+    `_blocks_in_region`) as a text part, plus (via that same module's
+    `_image_for_region`) the region cropped out of `Page.image` as an
+    `image_url` part when available, so the model can visually cross-check
+    row values the text extraction might have gotten wrong (misaligned
+    columns, merged cells). The call is also prompted with the Phase 5
+    column mapping for the whole document, so the model knows which column
+    means what without re-deriving it per page. The reply is validated
+    against the closed `TransactionExtraction` schema
     (`worker/worker/extracted_transactions.py`) — a list of
     `transaction_date`/`post_date`/`description`/`amount`/`currency` rows,
     nothing else (no category, no prose). Same `AIProvider`, same
@@ -201,7 +211,8 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
     alongside the existing `session.commit()` — the first phase that writes
     new rows into the `transactions` table rather than only mutating the
     `Statement` row. Skipped entirely when there's no `transaction_schema`.
-    See `docs/DECISIONS.md`'s 2026-08-24 "Phase 6" entry.
+    See `docs/DECISIONS.md`'s 2026-08-24 "Phase 6" and "Phase 6 follow-up"
+    entries.
 
 ## Viewing extracted text blocks, document classification, detected regions, and discovered schema (statements page → document analysis)
 

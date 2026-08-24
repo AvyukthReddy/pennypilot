@@ -4,7 +4,8 @@ import logging
 from pydantic import ValidationError
 
 from worker._ai_json import strip_markdown_fence
-from worker._regions import _blocks_in_region
+from worker._multimodal import image_part, text_part
+from worker._regions import _blocks_in_region, _image_for_region
 from worker.ai_provider import AIProvider
 from worker.config import default_ai_provider_config
 from worker.document import Document
@@ -22,17 +23,21 @@ class TransactionExtractionError(Exception):
     within MAX_ATTEMPTS."""
 
 
-def _render_region(document: Document, region: TransactionRegion) -> str:
+def _render_region(document: Document, region: TransactionRegion) -> list[dict]:
     pages_by_number = {page.page_number: page for page in document.pages}
     page = pages_by_number.get(region.page)
     if page is None:
-        return ""
+        return [text_part("")]
     lines = [f"=== Page {region.page} ==="]
     for block in _blocks_in_region(page, region.region):
         x0, y0 = block.x, block.y
         x1, y1 = block.x + block.width, block.y + block.height
         lines.append(f"[{x0:.0f}, {y0:.0f}, {x1:.0f}, {y1:.0f}] {block.text!r}")
-    return "\n".join(lines)
+    content: list[dict] = [text_part("\n".join(lines))]
+    image = _image_for_region(page, region.region)
+    if image is not None:
+        content.append(image_part(image))
+    return content
 
 
 def _system_prompt(transaction_fields: TransactionFields) -> str:
@@ -56,7 +61,10 @@ def _system_prompt(transaction_fields: TransactionFields) -> str:
         "already carries a sign. Only emit the fields transaction_date, "
         "post_date, description, amount, and currency — do NOT invent a "
         "category, do NOT add commentary or explanation, no prose, just the "
-        "transactions.\n\n"
+        "transactions. This region's rendered image may accompany its text "
+        "blocks — when present, use it to visually cross-check row values "
+        "the text extraction might have gotten wrong (misaligned columns, "
+        "merged cells).\n\n"
         "This is the JSON Schema your response must conform to — it "
         "describes the shape of the answer, it is NOT the answer itself. "
         "Respond with ONLY a JSON object that is a valid *instance* of this "

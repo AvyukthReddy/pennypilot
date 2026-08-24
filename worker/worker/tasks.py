@@ -184,7 +184,10 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         stmt.page_count = page_count
         stmt.parser_version = INGESTION_VERSION
         stmt.needs_ocr = needs_ocr
-        stmt.pages = [asdict(page) for page in pages]
+        stmt.pages = [
+            {key: value for key, value in asdict(page).items() if key != "image"}
+            for page in pages
+        ]
         stmt.document_analysis = (
             document_analysis.model_dump(mode="json") if document_analysis else None
         )

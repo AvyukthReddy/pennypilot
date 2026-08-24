@@ -120,14 +120,16 @@ request-flow maps).
   access layer (`worker/worker/config.py`, `db.py`, `models.py` — hand-mirrored,
   non-authoritative mappings; Alembic in `backend/` remains the sole schema
   authority). Dependencies: `celery[redis]`, `sqlalchemy`, `psycopg`, `httpx`,
-  `pdfplumber`, `python-dotenv`, `pydantic`, `openai` — `pypdf` was retired earlier
-  in favor of pdfplumber; `pydantic` was removed then re-added once Phase 3 needed
-  schema validation (see [DECISIONS.md](DECISIONS.md)). `openai` is used purely as
-  the client inside `worker/worker/ai_provider.py`'s `AIProvider` — a thin wrapper
-  over any OpenAI-compatible endpoint, not an OpenAI account. Which provider/model
-  actually runs is pure config (`AI_BASE_URL`/`MODEL_API_KEY`/`AI_MODEL`), defaulting
-  to Hugging Face's router (OpenRouter was tried first but has no free-tier Qwen
-  model at all).
+  `pdfplumber`, `python-dotenv`, `pydantic`, `openai`, `Pillow` — `pypdf` was retired
+  earlier in favor of pdfplumber; `pydantic` was removed then re-added once Phase 3
+  needed schema validation; `Pillow` was already pdfplumber's own transitive
+  dependency, made explicit once `worker/worker/_regions.py` started importing
+  `PIL.Image` directly to crop rendered page images (see [DECISIONS.md](DECISIONS.md)).
+  `openai` is used purely as the client inside `worker/worker/ai_provider.py`'s
+  `AIProvider` — a thin wrapper over any OpenAI-compatible endpoint, not an OpenAI
+  account. Which provider/model actually runs is pure config
+  (`AI_BASE_URL`/`MODEL_API_KEY`/`AI_MODEL`), defaulting to Hugging Face's router
+  (OpenRouter was tried first but has no free-tier Qwen model at all).
 - **Shared**: `shared/shared/schemas/transaction.py` (`ParsedTransaction`) is left in
   place but **unused** — no service currently depends on it. It's a plausible starting
   point for whatever contract the next parser needs, not active code. The Docker
@@ -145,13 +147,34 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: Phase 6 transaction
-  extraction — `worker/worker/transaction_extraction.py`'s
-  `TransactionExtractionService` reads every transaction row out of a single
-  detected region (called once per region, not once per document — the first
-  phase to break from the earlier per-document batching), using the Phase 5
-  column mapping to know which column means what. Produces closed-schema
-  `TransactionExtraction` (`worker/worker/extracted_transactions.py`) rows —
+- Nothing currently in flight. Last completed unit of work: multimodal
+  (image + text) input for transaction region detection and extraction.
+  `worker/worker/document.py`'s `Page` gained `image: bytes | None` — a
+  rendered PNG of the whole page (`worker/worker/pdf_analysis.py`'s
+  `analyze_pdf`, via `pdfplumber`'s `page.to_image()`, best-effort per page,
+  `None` on render failure), never persisted (stripped before
+  `Statement.pages` is written). New `worker/worker/_multimodal.py`
+  (`text_part`/`image_part` — OpenAI-format content-part builders) and
+  `_image_for_region` (added to `worker/worker/_regions.py`, crops a page's
+  image to a region's pixel bbox). `TransactionRegionDetectionService`
+  (Phase 4) now sends one user message per candidate page (text blocks +
+  that page's image, when available); `TransactionExtractionService`
+  (Phase 6) sends the region cropped to its own bbox. `AIProvider` itself
+  needed no changes. Classification (Phase 3) and column-mapping (Phase 5)
+  stay text-only — confirmed out of scope for this pass. `Document.data`
+  (raw PDF bytes) is unchanged, still passed through as-is. See
+  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 6 follow-up" entry.
+  Worker: 40 tests pass (`cd worker && poetry run pytest -q`); ruff clean.
+  `Pillow` is now a direct worker dependency (was already transitive via
+  `pdfplumber`) — `poetry.lock` re-synced. Backend/frontend untouched by
+  this pass, so their last-known counts (47 backend tests) still apply —
+  not re-verified.
+- Previously completed: Phase 6 transaction extraction —
+  `worker/worker/transaction_extraction.py`'s `TransactionExtractionService`
+  reads every transaction row out of a single detected region (called once
+  per region, not once per document), using the Phase 5 column mapping to
+  know which column means what. Produces closed-schema `TransactionExtraction`
+  (`worker/worker/extracted_transactions.py`) rows —
   `transaction_date`/`post_date`/`description`/`amount`/`currency` only, no
   category, no prose — which `worker/worker/tasks.py` turns into
   `TransactionRow`s and inserts via `session.add_all`, the first phase that
@@ -161,10 +184,7 @@ request-flow maps).
   falls back to the document's own classified currency when a row leaves it
   `null`. No new backend/frontend work needed — `GET /api/transactions` and
   the `/transactions` page already existed as an empty sink. See
-  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 entry. Worker: 35 tests pass
-  (`cd worker && poetry run pytest -q`); ruff clean. Backend/frontend
-  untouched by this phase, so their last-known counts (47 backend tests) still
-  apply — not re-verified in this pass.
+  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 6" entry.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not
   actually been run. Do that before relying on the containerized stack. (The

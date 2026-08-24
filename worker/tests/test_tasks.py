@@ -274,6 +274,8 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert first_page["page_number"] == 1
     assert first_page["text_blocks"]
     assert first_page["text_blocks"][0]["text"] == "07/14/2026 Coffee and pastries $5.75"
+    # Real page images are rendered during analyze_pdf, but never persisted.
+    assert "image" not in first_page
 
     assert len(calls) == 1
     assert statement.document_analysis["document_type"] == "bank_statement"

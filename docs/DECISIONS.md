@@ -4,6 +4,59 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-24 — Phase 6 follow-up: multimodal (image + text) input for region detection and extraction
+
+Every AI service up to this point read purely from `page.text_blocks` —
+coordinate-tagged text, no visual signal. `Page` (`worker/worker/document.py`)
+gains `image: bytes | None` (a rendered PNG of the whole page, `None` if
+rendering failed for that page) — `worker/worker/pdf_analysis.py`'s
+`analyze_pdf` renders it via `pdfplumber`'s own `page.to_image(resolution=
+PAGE_IMAGE_RESOLUTION).original` (100 DPI; Pillow/pypdfium2 were already
+pdfplumber's own transitive deps, now also declared directly since
+`worker/worker/_regions.py` imports `PIL.Image` itself). Rendering is
+best-effort per page (try/except, logged, `image=None` on failure) — matches
+the existing "a bonus-input problem, not core-ingestion" philosophy, doesn't
+touch the "corrupt PDF ⇒ fail ingestion" path.
+
+**Only wired into region detection (Phase 4) and extraction (Phase 6)** —
+confirmed with the user as the two steps where seeing the actual layout most
+plausibly helps (drawing a bounding box; reading exact row values off a table
+whose text extraction might garble alignment/merged cells). Classification
+(Phase 3) and column-mapping (Phase 5) stay text-only — more
+structural/semantic, an image mainly adds payload cost there.
+
+**`AIProvider.complete` needed zero changes** — it already forwards
+`messages` straight to the OpenAI SDK, which already accepts `content` as
+either a string or a list of parts (text + `image_url`). New
+`worker/worker/_multimodal.py` (`text_part`/`image_part`) builds those parts;
+new `_image_for_region` in `worker/worker/_regions.py` (alongside the
+existing `_blocks_in_region`) crops `page.image` to a region's pixel bbox,
+converting PDF points → pixels via `PAGE_IMAGE_RESOLUTION`.
+
+`TransactionRegionDetectionService` now sends **one user message per
+candidate page** (text blocks + that page's image, when available) instead
+of one combined text blob — still one LLM call per document, just multiple
+per-page messages within it, so an image stays unambiguously attached to its
+own page. `TransactionExtractionService` sends the region **cropped** to its
+own bounding box, matching what the text side already shows.
+
+**Not persisted.** `Statement.pages` JSONB already backs the
+`/statements/analysis` debug viewer — embedding a base64 PNG per page there
+would bloat the DB row and every read of it for no reader. `image` is
+stripped from the dict before `tasks.py` assigns `stmt.pages`; it lives only
+in-memory for the duration of the Celery task. No backend/frontend changes.
+
+**`Document.data` (raw PDF bytes) stays as-is** — explicitly out of scope
+this pass; a `Document{metadata, pages}` restructuring was floated but
+deferred, not requested yet.
+
+**Sets up (doesn't build) the eventual OCR path.** The architectural
+principle for when OCR gets built: it should produce the same `Page` shape
+(`text`, `text_blocks`, `image`) as `analyze_pdf` does today, so downstream
+AI services stay origin-agnostic between digital and scanned PDFs. `Page.image`
+existing now means OCR will just be a second populator of an already-defined
+field, not a new concept. `needs_ocr` itself is unchanged.
+
 ## 2026-08-24 — Phase 6: transaction extraction (real transaction-line parser)
 
 Closes the loop Phases 3-5 set up: Phase 3 flags which pages hold a

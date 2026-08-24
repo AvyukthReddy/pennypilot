@@ -50,6 +50,14 @@ def test_analyze_pdf_extracts_page_shape_and_text_blocks() -> None:
     assert not is_scanned(pages)
 
 
+def test_analyze_pdf_renders_page_image() -> None:
+    pages = analyze_pdf(_make_text_pdf())
+
+    page = pages[0]
+    assert page.image is not None
+    assert page.image[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 def test_analyze_pdf_blank_pages_flagged_as_scanned() -> None:
     pages = analyze_pdf(_make_blank_pdf(pages=2))
 

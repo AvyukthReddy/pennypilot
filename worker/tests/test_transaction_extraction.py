@@ -1,15 +1,26 @@
+import io
 import json
 from decimal import Decimal
 
 import pytest
+from PIL import Image
 
 from worker.document import Document, Page, TextBlock
+from worker.pdf_analysis import PAGE_IMAGE_RESOLUTION
 from worker.transaction_extraction import (
     TransactionExtractionError,
     TransactionExtractionService,
 )
 from worker.transaction_regions import TransactionRegion
 from worker.transaction_schema import TransactionFields
+
+
+def _make_page_image(width_pt: float, height_pt: float) -> bytes:
+    scale = PAGE_IMAGE_RESOLUTION / 72
+    img = Image.new("RGB", (round(width_pt * scale), round(height_pt * scale)), color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class _FakeProvider:
@@ -106,10 +117,24 @@ def test_extract_prompt_includes_field_mapping_and_only_region_blocks() -> None:
 
     system_content = provider.calls[0][0]["content"]
     user_content = provider.calls[0][1]["content"]
+    user_text = next(part["text"] for part in user_content if part["type"] == "text")
     assert "column_1" in system_content
     assert "column_3" in system_content
-    assert "Coffee" in user_content
-    assert "STATEMENT HEADER" not in user_content
+    assert "Coffee" in user_text
+    assert "STATEMENT HEADER" not in user_text
+    assert not any(part["type"] == "image_url" for part in user_content)
+
+
+def test_extract_includes_cropped_region_image_when_available() -> None:
+    document = _make_document()
+    document.pages[0].image = _make_page_image(document.pages[0].width, document.pages[0].height)
+    provider = _FakeProvider([VALID_EXTRACTION_JSON])
+    service = TransactionExtractionService(provider=provider)
+
+    service.extract(document, _make_region(), _make_fields())
+
+    user_content = provider.calls[0][1]["content"]
+    assert any(part["type"] == "image_url" for part in user_content)
 
 
 def test_extract_retries_after_invalid_then_succeeds() -> None:

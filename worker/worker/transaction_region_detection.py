@@ -4,6 +4,7 @@ import logging
 from pydantic import ValidationError
 
 from worker._ai_json import strip_markdown_fence
+from worker._multimodal import image_part, text_part
 from worker.ai_provider import AIProvider
 from worker.config import default_ai_provider_config
 from worker.document import Document, Page
@@ -33,16 +34,22 @@ def _candidate_pages(document: Document, document_analysis: DocumentAnalysis) ->
     return [page for page in document.pages if page.page_number in transaction_page_numbers]
 
 
-def _render_pages(pages: list[Page]) -> str:
-    blocks = []
+def _render_pages(pages: list[Page]) -> list[dict]:
+    """One user message per page: its coordinate-tagged text blocks, plus
+    (when available) its rendered image, so each image stays unambiguously
+    attached to the page whose blocks it accompanies."""
+    messages: list[dict] = []
     for page in pages:
         lines = [f"=== Page {page.page_number} ({page.width:.0f}x{page.height:.0f}) ==="]
         for block in page.text_blocks:
             x0, y0 = block.x, block.y
             x1, y1 = block.x + block.width, block.y + block.height
             lines.append(f"[{x0:.0f}, {y0:.0f}, {x1:.0f}, {y1:.0f}] {block.text!r}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+        content: list[dict] = [text_part("\n".join(lines))]
+        if page.image is not None:
+            content.append(image_part(page.image))
+        messages.append({"role": "user", "content": content})
+    return messages
 
 
 def _system_prompt() -> str:
@@ -54,7 +61,10 @@ def _system_prompt() -> str:
         "[x0, y0, x1, y1] \"text\", in points from the page's top-left corner.\n\n"
         "For each page, find the single bounding region that contains the "
         "transaction table itself — excluding page headers, footers, logos, "
-        "and margins. Use the same coordinate space you were given.\n\n"
+        "and margins. Use the same coordinate space you were given. A "
+        "page's rendered image may accompany its text blocks — when "
+        "present, use it to visually cross-check the region you pick "
+        "against the text-derived coordinates.\n\n"
         "This is the JSON Schema your response must conform to — it describes "
         "the shape of the answer, it is NOT the answer itself. Respond with "
         "ONLY a JSON object that is a valid *instance* of this schema (actual "
@@ -85,7 +95,7 @@ class TransactionRegionDetectionService:
         pages = _candidate_pages(document, document_analysis)
         messages: list[dict] = [
             {"role": "system", "content": _system_prompt()},
-            {"role": "user", "content": _render_pages(pages)},
+            *_render_pages(pages),
         ]
 
         last_error: str | None = None

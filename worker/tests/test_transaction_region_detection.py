@@ -88,10 +88,29 @@ def test_detect_only_sends_transaction_flagged_pages() -> None:
 
     service.detect(_make_document(), _make_analysis())
 
-    prompt_content = provider.calls[0][1]["content"]
-    assert "Page 2" in prompt_content
-    assert "Page 3" in prompt_content
-    assert "Page 1" not in prompt_content
+    user_messages = [m for m in provider.calls[0] if m["role"] == "user"]
+    all_text = " ".join(
+        part["text"] for m in user_messages for part in m["content"] if part["type"] == "text"
+    )
+    assert "Page 2" in all_text
+    assert "Page 3" in all_text
+    assert "Page 1" not in all_text
+
+
+def test_detect_includes_page_image_when_available() -> None:
+    document = _make_document()
+    document.pages[1].image = b"fake-png-bytes-page-2"
+    provider = _FakeProvider([VALID_DETECTION_JSON])
+    service = TransactionRegionDetectionService(provider=provider)
+
+    service.detect(document, _make_analysis())
+
+    user_messages = [m for m in provider.calls[0] if m["role"] == "user"]
+    # Page 2 (index 0 of the two candidate pages) has an image; page 3 doesn't.
+    page_2_parts = user_messages[0]["content"]
+    page_3_parts = user_messages[1]["content"]
+    assert any(part["type"] == "image_url" for part in page_2_parts)
+    assert not any(part["type"] == "image_url" for part in page_3_parts)
 
 
 def test_detect_retries_after_invalid_then_succeeds() -> None:
