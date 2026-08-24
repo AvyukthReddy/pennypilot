@@ -10,5 +10,6 @@ export const statementsEndpoints = {
   transactionSchema: (id: string) => getApiUrl(`/api/statements/${id}/transaction-schema`),
   transactionVerification: (id: string) =>
     getApiUrl(`/api/statements/${id}/transaction-verification`),
+  financialValidation: (id: string) => getApiUrl(`/api/statements/${id}/financial-validation`),
   delete: (id: string) => getApiUrl(`/api/statements/${id}`),
 };

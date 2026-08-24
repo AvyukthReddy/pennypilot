@@ -4,6 +4,54 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-24 — Phase 8: deterministic financial validation
+
+Phases 6-7 extract and AI-verify transactions, but nothing checks the
+*numbers* against each other — that's arithmetic, not something an LLM call
+is needed for. New `worker/worker/financial_validation.py`'s
+`validate_transactions(document_analysis, transactions) ->
+FinancialValidation` is a plain Python function (no `AIProvider`, no
+schema/service-file split like every other phase — there's nothing to
+inject or mock) that runs once per statement over the *final* transaction
+list, after the per-region extract/verify/correct loop completes (duplicate
+detection and balance reconciliation are inherently statement-wide, not
+per-region).
+
+Checks: `post_date < transaction_date` or a `transaction_date.year` outside
+a generous static `[1990, 2100]` (deliberately not compared against
+`date.today()`, to keep the validator fully deterministic and
+time-mock-free); `transaction_date` outside the statement period (only when
+known); a zero amount or more than 2 decimal places (`TransactionRow.amount`
+is `Numeric(12,2)` and would otherwise silently round/truncate on insert);
+duplicate `(transaction_date, description, amount)` tuples; and — when the
+statement states a beginning/ending balance — `beginning_balance + sum(all
+signed amounts) == ending_balance` within a $0.01 tolerance (amounts are
+already signed per Phase 6's convention, so this is exactly `beginning + net
+== ending`, no separate credit/debit summing needed).
+
+**Nothing extracted beginning/ending balance before this.** `DocumentAnalysis`
+(Phase 3, `worker/worker/document_analysis.py`) gains
+`beginning_balance`/`ending_balance: Decimal | None` — a natural, low-risk
+extension of the same document-level-facts extraction that already pulls
+`currency`/`statement_start`/`statement_end` from the same account-summary
+text, rather than a new AI phase. `document_understanding.py`'s prompt gets
+one added sentence asking for them when visible.
+
+**Purely diagnostic, matching the user's own framing** ("now you know
+extraction is wrong," not "now go fix it") — doesn't gate persistence,
+doesn't trigger re-extraction, doesn't touch `status`. Skipped entirely when
+there are no transactions to check. Wrapped in its own try/except in
+`tasks.py` for defensive consistency with the rest of the pipeline, though a
+pure function raising is very unlikely.
+
+**Persisted as `Statement.financial_validation`** (nullable `JSONB`,
+migration `a7b8c9d0e1f2`) — issues carry `type` + free-text `description`
+only, no `page` (unlike `VerificationIssue`), since a duplicate or balance
+mismatch isn't naturally one-page-scoped. Exposed via a new
+`GET /api/statements/{id}/financial-validation` and a new section on
+`/statements/analysis`; the existing document-analysis summary card also
+now shows beginning/ending balance when present.
+
 ## 2026-08-24 — Phase 7: transaction verification (self-correcting extraction)
 
 Phase 6 extracted every region's transactions and persisted them immediately

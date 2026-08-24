@@ -45,8 +45,8 @@ request-flow maps).
   navbar. Uploads are deduplicated by SHA-256 (`Statement.file_hash`) — re-uploading
   the same file for the same user returns `409`.
 - **Statement ingestion, analysis, understanding, region detection, schema
-  discovery, transaction extraction, and verification (Phase 1+2+3+4+5+6+7)**:
-  after upload, a Celery
+  discovery, transaction extraction, verification, and financial validation
+  (Phase 1+2+3+4+5+6+7+8)**: after upload, a Celery
   task (`worker.parse_statement`) downloads the stored file unmodified, then for
   PDFs runs `worker/worker/pdf_analysis.py`'s `analyze_pdf` (via `pdfplumber`) to
   produce a `Page` per page (`worker/worker/document.py` — `width`/`height`/
@@ -55,7 +55,8 @@ request-flow maps).
   When there's real extracted text, `worker/worker/document_understanding.py`'s
   `DocumentUnderstandingService.analyze` then classifies the document
   (bank/credit-card statement, institution, account, currency, period,
-  page-ranged sections) via Qwen2.5-VL-7B-Instruct over Hugging Face's Inference
+  beginning/ending balance, page-ranged sections) via Qwen2.5-VL-7B-Instruct
+  over Hugging Face's Inference
   Providers router (free tier), validated against the closed `DocumentAnalysis`
   Pydantic schema (`worker/worker/document_analysis.py`) with one self-repair
   retry on invalid JSON — best-effort, never fails the statement. When that
@@ -90,49 +91,63 @@ request-flow maps).
   (`worker/worker/verification_issues.py`). When invalid,
   `TransactionExtractionService.extract` is called again for that region
   with the issues as correction feedback, and that retry's output is what
-  actually gets persisted (trusted either way, not re-verified).
+  actually gets persisted (trusted either way, not re-verified). Finally,
+  once the region loop finishes, `worker/worker/financial_validation.py`'s
+  `validate_transactions` — a plain Python function, no AI call — runs once
+  over the entire final transaction list: date sanity, amount sanity,
+  duplicate detection, and (only when `document_analysis` states both a
+  beginning and ending balance) arithmetic reconciliation
+  (`beginning_balance + sum(all signed amounts) == ending_balance`).
   `Statement.page_count`/`parser_version`/
   `needs_ocr`/`pages`/`document_analysis`/`transaction_regions`/
-  `transaction_schema`/`transaction_verification` all get persisted (the
-  five JSON-shaped ones as `JSONB`, migrations
+  `transaction_schema`/`transaction_verification`/`financial_validation` all
+  get persisted (the six JSON-shaped ones as `JSONB`, migrations
   `b2e3d4f5a6c7`/`c3f4a5b6d7e8`/`d4e5f6a7b8c9`/`e5f6a7b8c9d0`/
-  `f6a7b8c9d0e1`), `status` becomes `"ingested"` (a scanned PDF, or any AI
-  step failing, still succeeds — each is independently best-effort/non-fatal,
-  and extraction/verification are best-effort *per region*, so one page
-  failing doesn't discard another page's already-extracted transactions),
-  and every successfully extracted (and possibly corrected) row is inserted
-  into the `transactions` table (`worker/worker/models.py`'s
-  `TransactionRow`). Earlier parsing-pipeline attempts were deleted entirely
-  (never committed, so no history to preserve). See
-  [DECISIONS.md](DECISIONS.md)'s "Phase 7: transaction verification", "Phase
+  `f6a7b8c9d0e1`/`a7b8c9d0e1f2`), `status` becomes `"ingested"` (a scanned
+  PDF, or any AI step failing, still succeeds — each is independently
+  best-effort/non-fatal, and extraction/verification are best-effort *per
+  region*, so one page failing doesn't discard another page's
+  already-extracted transactions; financial validation is purely diagnostic
+  and never touches `status` either way), and every successfully extracted
+  (and possibly corrected) row is inserted into the `transactions` table
+  (`worker/worker/models.py`'s `TransactionRow`). Earlier parsing-pipeline
+  attempts were deleted entirely (never committed, so no history to
+  preserve). See [DECISIONS.md](DECISIONS.md)'s "Phase 8: deterministic
+  financial validation", "Phase 7: transaction verification", "Phase
   6: transaction extraction", "Phase 5: transaction schema discovery", "Phase
   4: transaction region detection", "Phase 3: document understanding",
   "Persist `Statement.pages`", "Phase 2: PDF document analysis", and
   "Statement parsing scoped down to Phase 1" entries.
 - **Viewing extracted text blocks, document classification, detected regions,
-  discovered schema, and verification report**:
+  discovered schema, verification report, and financial validation**:
   `GET /api/statements/{id}/pages`, `/analysis`, `/transaction-regions`,
-  `/transaction-schema`, and `/transaction-verification`
-  (`backend/app/api/statements.py`) return a statement's persisted
-  `pages`/`document_analysis`/`transaction_regions`/`transaction_schema`/
-  `transaction_verification` (same ownership check as `/view`). Frontend: a
+  `/transaction-schema`, `/transaction-verification`, and
+  `/financial-validation` (`backend/app/api/statements.py`) return a
+  statement's persisted `pages`/`document_analysis`/`transaction_regions`/
+  `transaction_schema`/`transaction_verification`/`financial_validation`
+  (same ownership check as `/view`). Frontend: a
   "Text blocks" link per statement row (`components/statements-list.tsx`,
   shown for `status === "ingested"` PDFs) opens `/statements/analysis`, which
   renders, top to bottom: `components/document-analysis-summary.tsx`
-  (document type/institution/account/currency/period + section list, or "Not
+  (document type/institution/account/currency/period/beginning and ending
+  balance + section list, or "Not
   yet classified"), `components/transaction-regions-view.tsx` (page/region
   table, or an explanatory empty state), `components/transaction-schema-view.tsx`
   (target-field → source-column table, or an explanatory empty state),
   `components/transaction-verification-view.tsx` ("all verified", a
-  type/page/description issue table, or an explanatory empty state), then
+  type/page/description issue table, or an explanatory empty state),
+  `components/financial-validation-view.tsx` ("all checks passed", a
+  type/description issue table plus a balance reconciliation breakdown, or
+  an explanatory empty state), then
   `components/statement-pages-view.tsx` (each page as a collapsible section with
   a table of `text_blocks`). This is a debugging/inspection view, not part of
   the intended end-user product surface — it exists so extraction/
-  classification/region/schema/verification quality can be checked against
-  real statements.
+  classification/region/schema/verification/validation quality can be
+  checked against real statements.
 - **Worker**: `worker/` (Celery) has one task (`worker.parse_statement`,
   `worker/worker/tasks.py`, ingestion + analysis + understanding + region
-  detection + schema discovery + transaction extraction + verification) with
+  detection + schema discovery + transaction extraction + verification +
+  financial validation) with
   its own DB
   access layer (`worker/worker/config.py`, `db.py`, `models.py` — hand-mirrored,
   non-authoritative mappings; Alembic in `backend/` remains the sole schema
@@ -164,30 +179,30 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: Phase 7
-  transaction verification — `worker/worker/transaction_verification.py`'s
-  `TransactionVerificationService` checks each region's extraction against
-  that region's own content (text + optional image, via `_regions.py`'s new
-  `_region_content`) plus the extracted JSON, for missing/duplicate
-  transactions, wrong dates/amounts/signs, and split-or-merged multi-line
-  rows — closed schema `worker/worker/verification_issues.py`
-  (`VerificationIssue`/`TransactionVerification`). When invalid,
-  `TransactionExtractionService.extract` (which gained optional
-  `previous_attempt`/`verification_issues` params) is called again for that
-  region with the issues as correction feedback; the retry's output is
-  trusted and persisted whether or not it's still flagged — no
-  re-verification loop, one corrective attempt only. Best-effort throughout:
-  a verification failure just keeps the original extraction, a corrective
-  retry failure falls back to the pre-retry extraction. Every region's
-  *first* verification result is aggregated onto
-  `Statement.transaction_verification` (`JSONB`, migration `f6a7b8c9d0e1`),
-  exposed via a new `GET /api/statements/{id}/transaction-verification` and
-  shown on `/statements/analysis` via
-  `components/transaction-verification-view.tsx`. See
-  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 7" entry. Worker: 49
-  tests pass (`cd worker && poetry run pytest -q`); ruff clean. Backend: 51
-  tests pass (`cd backend && poetry run pytest -q`), migration applied.
-  Frontend: `tsc --noEmit` and `eslint src/` both clean.
+- Nothing currently in flight. Last completed unit of work: Phase 8
+  deterministic financial validation — `worker/worker/financial_validation.py`'s
+  `validate_transactions(document_analysis, transactions)` is a plain
+  Python function (no `AIProvider`, no network call, nothing to mock) that
+  runs once per statement over the final transaction list: date sanity
+  (`post_date` before `transaction_date`, implausible years, dates outside
+  the statement period), amount sanity (zero, or more than 2 decimal
+  places), duplicate `(transaction_date, description, amount)` tuples, and
+  — only when the statement states both a beginning and ending balance —
+  `beginning_balance + sum(all signed amounts) == ending_balance`
+  reconciliation within a $0.01 tolerance. `DocumentAnalysis` (Phase 3)
+  gained `beginning_balance`/`ending_balance: Decimal | None` to supply
+  those two figures — `document_understanding.py`'s prompt asks for them
+  when visible. Purely diagnostic: never blocks persistence, never triggers
+  re-extraction, never touches `status`; skipped entirely when there are no
+  transactions to check. Persisted as `Statement.financial_validation`
+  (`JSONB`, migration `a7b8c9d0e1f2`), exposed via a new
+  `GET /api/statements/{id}/financial-validation` and shown on
+  `/statements/analysis` via `components/financial-validation-view.tsx`;
+  the existing summary card also now shows beginning/ending balance when
+  present. See [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 8" entry.
+  Worker: 62 tests pass (`cd worker && poetry run pytest -q`); ruff clean.
+  Backend: 56 tests pass (`cd backend && poetry run pytest -q`), migration
+  applied. Frontend: `tsc --noEmit` and `eslint src/` both clean.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not
   actually been run. Do that before relying on the containerized stack. (The
@@ -209,7 +224,8 @@ request-flow maps).
 - **No OCR/vision exists.** `Statement.needs_ocr` gets set for scanned/image-only
   PDFs, but nothing acts on it yet — flagged only, not processed. Document
   understanding, transaction region detection, schema discovery, extraction,
-  and verification are all skipped entirely for these too (see above).
+  verification, and financial validation (no transactions to check) are all
+  skipped entirely for these too (see above).
 - **All five AI steps need `MODEL_API_KEY`** (or the `MODEL_PROVIDER`-specific
   `OPENROUTER_API_KEY`/`HUGGINGFACE_API_KEY` — see `worker/worker/config.py`).
   Without it, every PDF statement ingests fine but `document_analysis`/
@@ -251,12 +267,17 @@ request-flow maps).
 
 - OCR/vision for scanned PDFs (`Statement.needs_ocr=true`) — detection exists,
   nothing consumes the flag yet, and document understanding/region detection/
-  schema discovery/extraction/verification are all skipped for these too. Also
+  schema discovery/extraction/verification/financial validation are all
+  skipped for these too. Also
   not yet scoped (which OCR engine/vision API, whether it produces the same
   `Page`/`text_blocks` shape or something else).
 - Transaction categorization (AI/merchant-based) and a full transaction-editing
-  UI — the `transactions` table now actually gets populated (Phase 6+7), so
-  this is the natural next consumer-facing feature.
+  UI — the `transactions` table now actually gets populated and checked
+  (Phase 6+7+8), so this is the natural next consumer-facing feature.
 - Dedup/idempotency guard on statement reprocessing — see "Known broken" above.
+- Surfacing `financial_validation`/`transaction_verification` issues
+  somewhere a real user would see them (not just the debug
+  `/statements/analysis` view) — e.g. a warning badge on the statements list
+  — once there's a concrete product need for it.
 - Run the Docker build once Docker Desktop is available (see "In progress" above) —
   note the worker image will need to build `pydantic`/`openai` now too.

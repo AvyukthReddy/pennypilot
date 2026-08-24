@@ -74,6 +74,14 @@ INVALID_VERIFICATION = TransactionVerification(
     issues=[{"type": "wrong_amount", "page": 1, "description": "amount should be -7.50"}],
 )
 
+ANALYSIS_WITH_BALANCE = DocumentAnalysis(
+    document_type="bank_statement",
+    currency="USD",
+    sections=[{"type": "transactions", "pages": [1]}],
+    beginning_balance=Decimal("1000"),
+    ending_balance=Decimal("992.58"),
+)
+
 
 class _FakeUnderstandingService:
     """Stand-in for DocumentUnderstandingService — no real network call.
@@ -376,6 +384,9 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert len(extraction_calls) == 1
     assert statement.transaction_verification == {"valid": True, "issues": []}
 
+    # Financial validation is real (not mocked) — pure Python, no provider.
+    assert statement.financial_validation == {"valid": True, "issues": [], "balance_check": None}
+
 
 def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch) -> None:
     statement = _make_statement("application/pdf")
@@ -536,6 +547,60 @@ def test_parse_statement_extraction_currency_falls_back_to_document_analysis(mon
     assert statement.status == "ingested"
     assert len(session.added) == 1
     assert session.added[0].currency == VALID_ANALYSIS.currency == "USD"
+
+
+def test_parse_statement_financial_validation_reconciles_balance(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=ANALYSIS_WITH_BALANCE)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    validation = statement.financial_validation
+    assert validation["valid"] is True
+    assert validation["balance_check"]["reconciled"] is True
+    assert validation["balance_check"]["expected_ending_balance"] == "992.58"
+
+
+def test_parse_statement_financial_validation_detects_duplicate_across_regions(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    two_regions = TransactionRegionDetection(
+        transaction_regions=[
+            {"page": 1, "region": [45, 180, 570, 730]},
+            {"page": 2, "region": [45, 180, 570, 730]},
+        ],
+    )
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=two_regions)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    # Both regions independently "find" the exact same transaction — a
+    # realistic failure mode when adjacent regions overlap near a page break.
+    _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
+
+    session = _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert len(session.added) == 2
+    validation = statement.financial_validation
+    assert validation["valid"] is False
+    assert any(issue["type"] == "duplicate_transaction" for issue in validation["issues"])
+
+
+def test_parse_statement_skips_financial_validation_without_transactions(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=EMPTY_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    assert statement.status == "ingested"
+    assert statement.financial_validation is None
 
 
 def test_parse_statement_invalid_verification_triggers_corrective_retry(monkeypatch) -> None:

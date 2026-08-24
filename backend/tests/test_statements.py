@@ -644,6 +644,128 @@ def test_get_statement_transaction_verification_returns_persisted_report(make_to
     assert body["issues"][0]["page"] == 3
 
 
+def test_get_statement_analysis_includes_balance_fields(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={
+            "document_type": "bank_statement",
+            "sections": [],
+            "beginning_balance": "1000.00",
+            "ending_balance": "1380.00",
+        },
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/analysis",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    analysis = response.json()["document_analysis"]
+    assert analysis["beginning_balance"] == "1000.00"
+    assert analysis["ending_balance"] == "1380.00"
+
+
+def test_get_statement_financial_validation_requires_auth() -> None:
+    response = client.get(f"/api/statements/{uuid.uuid4()}/financial-validation")
+    assert response.status_code == 401
+
+
+def test_get_statement_financial_validation_rejects_other_users_statement(make_token) -> None:
+    other_user_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="not-mine.pdf",
+        storage_path="somewhere/not-mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        financial_validation=None,
+    )
+    _use_fake_db(FakeSession([other_user_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{other_user_statement.id}/financial-validation",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_statement_financial_validation_returns_null_when_not_yet_run(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        financial_validation=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/financial-validation",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is None
+    assert body["issues"] == []
+    assert body["balance_check"] is None
+
+
+def test_get_statement_financial_validation_returns_persisted_report(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        financial_validation={
+            "valid": False,
+            "issues": [
+                {"type": "balance_mismatch", "description": "Expected 1330.00, statement shows 1380.00"},
+            ],
+            "balance_check": {
+                "beginning_balance": "1000.00",
+                "net_change": "330.00",
+                "expected_ending_balance": "1330.00",
+                "actual_ending_balance": "1380.00",
+                "reconciled": False,
+            },
+        },
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/financial-validation",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert body["issues"][0]["type"] == "balance_mismatch"
+    assert body["balance_check"]["reconciled"] is False
+    assert body["balance_check"]["expected_ending_balance"] == "1330.00"
+
+
 def test_delete_statement_rejects_other_users_statement(make_token) -> None:
     other_user_statement = Statement(
         id=uuid.uuid4(),
