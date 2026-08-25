@@ -37,7 +37,7 @@ export function TransactionRegionsView({ statementId }: { statementId: string })
       .then((data) => {
         if (data) setRegions(data.transaction_regions ?? []);
       });
-    // regionsRequest.run is stable (useCallback with no deps) — safe to omit.
+    // regionsRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statementId]);
 
@@ -56,7 +56,7 @@ export function TransactionRegionsView({ statementId }: { statementId: string })
   if (regions.length === 0) {
     return (
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        No transaction regions detected — either detection hasn&apos;t run yet, or no
+        No transaction regions detected. Either detection hasn&apos;t run yet, or no
         transaction section was found on this statement.
       </p>
     );

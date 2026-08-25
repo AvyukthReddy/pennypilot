@@ -42,7 +42,7 @@ def test_analyze_pdf_extracts_page_shape_and_text_blocks() -> None:
     assert block.x == pytest.approx(145, abs=1)
     # drawString's baseline is at y=480 (measured from the page bottom);
     # pdfplumber's "top" is measured from the page top, so ~792-480=312,
-    # nudged down for line ascent — allow a wide tolerance for font metrics.
+    # nudged down for line ascent, allow a wide tolerance for font metrics.
     assert block.y == pytest.approx(302, abs=15)
     assert block.width > 0
     assert block.height > 0

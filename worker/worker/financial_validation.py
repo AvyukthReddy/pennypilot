@@ -14,7 +14,7 @@ FinancialIssueType = Literal[
     "balance_mismatch",
 ]
 
-# A generous static sanity range for transaction_date.year — deliberately
+# A generous static sanity range for transaction_date.year, deliberately
 # not compared against date.today() so this stays fully deterministic and
 # doesn't need time-mocking in tests.
 MIN_REASONABLE_YEAR = 1990
@@ -181,7 +181,7 @@ def validate_transactions(
 ) -> FinancialValidation:
     """Deterministic, non-AI validation of a statement's final transaction
     list: date/amount sanity, duplicates, and (when the statement states a
-    beginning/ending balance) arithmetic reconciliation. Purely diagnostic —
+    beginning/ending balance) arithmetic reconciliation. Purely diagnostic,
     never blocks persistence or triggers re-extraction, just surfaces
     problems for review."""
     issues = _check_dates(transactions, document_analysis)

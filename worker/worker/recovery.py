@@ -23,12 +23,12 @@ def attempt_recovery(
     extraction_service: TransactionExtractionService | None = None,
 ) -> tuple[dict[int, TransactionExtraction], FinancialValidation]:
     """When `financial_validation` failed with a balance_mismatch, tries
-    re-extracting one region at a time (suspect regions — no successful
-    Phase-7 verification — first, then the rest in page order) and
+    re-extracting one region at a time (suspect regions, no successful
+    Phase-7 verification, first, then the rest in page order) and
     re-validating after each, stopping as soon as one reconciles. Returns
     the (possibly updated) extraction_by_page and the final
     FinancialValidation, whose recovery_attempts records every candidate
-    tried. A no-op — returns the inputs unchanged — when validation already
+    tried. A no-op, returns the inputs unchanged, when validation already
     passed or the failure isn't a balance_mismatch."""
     if financial_validation.valid:
         return extraction_by_page, financial_validation

@@ -15,7 +15,7 @@ class TextBlock:
 
 @dataclass
 class ImageRegion:
-    """An embedded image's position on a page. Bounding box only — nothing
+    """An embedded image's position on a page. Bounding box only, nothing
     consumes pixel data yet, so bytes aren't extracted."""
 
     x: float
@@ -33,7 +33,7 @@ class Page:
     text_blocks: list[TextBlock]
     images: list[ImageRegion]
     # A rendered raster (PNG) of the whole page, at PAGE_IMAGE_RESOLUTION (see
-    # pdf_analysis.py) — None if rendering failed for this page. Kept
+    # pdf_analysis.py), None if rendering failed for this page. Kept
     # in-memory only; never persisted to Statement.pages.
     image: bytes | None = None
 
@@ -41,7 +41,7 @@ class Page:
 @dataclass
 class Document:
     """The ingested-and-ready-for-parsing unit a future parser will consume.
-    Built once ingestion succeeds. Nothing reads it yet — this is the
+    Built once ingestion succeeds. Nothing reads it yet, this is the
     explicit handoff contract for the parser that doesn't exist yet."""
 
     statement_id: str

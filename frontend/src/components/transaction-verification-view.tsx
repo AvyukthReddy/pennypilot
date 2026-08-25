@@ -57,7 +57,7 @@ export function TransactionVerificationView({ statementId }: { statementId: stri
       .then((data) => {
         if (data) setReport(data);
       });
-    // verificationRequest.run is stable (useCallback with no deps) — safe to omit.
+    // verificationRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statementId]);
 
@@ -76,7 +76,7 @@ export function TransactionVerificationView({ statementId }: { statementId: stri
   if (!report || report.valid === null) {
     return (
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        No verification has run yet — either extraction hasn&apos;t run, or no
+        No verification has run yet. Either extraction hasn&apos;t run, or no
         transactions were extracted to check.
       </p>
     );
@@ -85,7 +85,7 @@ export function TransactionVerificationView({ statementId }: { statementId: stri
   if (report.valid && report.issues.length === 0) {
     return (
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        All extracted transactions were verified — no issues found.
+        All extracted transactions were verified, no issues found.
       </p>
     );
   }

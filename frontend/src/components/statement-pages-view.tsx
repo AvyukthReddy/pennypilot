@@ -54,7 +54,7 @@ export function StatementPagesView({ statementId }: { statementId: string }) {
     pagesRequest.run(statementsEndpoints.pages(statementId), APP_METHOD.GET).then((data) => {
       if (data) setPages(data.pages);
     });
-    // pagesRequest.run is stable (useCallback with no deps) — safe to omit.
+    // pagesRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statementId]);
 
@@ -75,7 +75,7 @@ export function StatementPagesView({ statementId }: { statementId: string }) {
 
       {pagesRequest.hasSettled && !pagesRequest.loading && !pagesRequest.error && pages.length === 0 && (
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          No page data for this statement — either it hasn&apos;t finished analysis yet, or it&apos;s
+          No page data for this statement. Either it hasn&apos;t finished analysis yet, or it&apos;s
           a CSV (which has no pages).
         </p>
       )}
@@ -87,7 +87,7 @@ export function StatementPagesView({ statementId }: { statementId: string }) {
           open={page.page_number === 1}
         >
           <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-black dark:text-zinc-50">
-            Page {page.page_number} — {Math.round(page.width)}×{Math.round(page.height)} ·{" "}
+            Page {page.page_number}: {Math.round(page.width)}×{Math.round(page.height)} ·{" "}
             {page.text_blocks.length} text blocks
             {page.images.length > 0 ? ` · ${page.images.length} images` : ""}
           </summary>

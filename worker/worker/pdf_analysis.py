@@ -13,14 +13,14 @@ logger = logging.getLogger(__name__)
 SCANNED_TEXT_THRESHOLD = 20
 
 # DPI used to rasterize each page for AI services that benefit from seeing
-# the actual visual layout (transaction region detection, extraction) — not
+# the actual visual layout (transaction region detection, extraction), not
 # persisted anywhere, so this is purely an inference-time resolution choice.
 PAGE_IMAGE_RESOLUTION = 100
 
 
 def analyze_pdf(data: bytes) -> list[Page]:
     """Inspects a PDF's text layer and layout. Raises if the PDF can't be
-    opened (corrupt/unreadable) — callers already handle that broadly."""
+    opened (corrupt/unreadable), callers already handle that broadly."""
     pages: list[Page] = []
     with pdfplumber.open(io.BytesIO(data)) as pdf:
         for index, page in enumerate(pdf.pages, start=1):
@@ -66,7 +66,7 @@ def analyze_pdf(data: bytes) -> list[Page]:
 
 
 def is_scanned(pages: list[Page]) -> bool:
-    """True when a PDF has (near-)no extractable text layer — a scanned or
+    """True when a PDF has (near-)no extractable text layer, a scanned or
     image-only document that a future OCR/vision pass would need to read."""
     if not pages:
         return False

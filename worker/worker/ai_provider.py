@@ -13,7 +13,7 @@ class AIProviderConfig:
 class AIProvider:
     """Thin wrapper around an OpenAI-compatible chat completions endpoint.
     Base URL, API key, and model are all configuration (see
-    worker.config.default_ai_provider_config) — swapping providers or
+    worker.config.default_ai_provider_config), swapping providers or
     benchmarking a different model is a config change, never a code change
     to the extraction pipeline that calls this."""
 

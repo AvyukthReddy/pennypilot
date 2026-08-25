@@ -31,24 +31,24 @@ def _system_prompt(transaction_fields: TransactionFields) -> str:
         "transaction table region of a financial statement. Each block is "
         "shown as [x0, y0, x1, y1] \"text\", in points from the page's "
         "top-left corner.\n\n"
-        "This document's column layout was already discovered — here is the "
+        "This document's column layout was already discovered, here is the "
         "mapping from target fields to this document's actual columns "
         "(column_N labels refer to left-to-right x-position, and an "
         "amount-bearing column may carry semantics \"debit\" or \"credit\" "
         "when the table splits amount across two columns):\n\n"
         f"{fields}\n\n"
         "Using that mapping, extract EVERY transaction row present in the "
-        "blocks below — not a sample, all of them. For a debit/credit-split "
+        "blocks below, not a sample, all of them. For a debit/credit-split "
         "amount, combine the two columns into a single signed amount per row "
         "(debit negative, credit positive) unless the column's own text "
         "already carries a sign. Only emit the fields transaction_date, "
-        "post_date, description, amount, and currency — do NOT invent a "
+        "post_date, description, amount, and currency, do NOT invent a "
         "category, do NOT add commentary or explanation, no prose, just the "
         "transactions. This region's rendered image may accompany its text "
-        "blocks — when present, use it to visually cross-check row values "
+        "blocks, when present, use it to visually cross-check row values "
         "the text extraction might have gotten wrong (misaligned columns, "
         "merged cells).\n\n"
-        "This is the JSON Schema your response must conform to — it "
+        "This is the JSON Schema your response must conform to, it "
         "describes the shape of the answer, it is NOT the answer itself. "
         "Respond with ONLY a JSON object that is a valid *instance* of this "
         "schema (actual values, not the schema's own \"$defs\"/\"properties\""
@@ -61,7 +61,7 @@ def _system_prompt(transaction_fields: TransactionFields) -> str:
 class TransactionExtractionService:
     """TransactionExtractionService.extract(document, region, transaction_fields)
     -> TransactionExtraction. Called once per detected transaction region
-    (i.e. once per flagged page), not once per document — each region's rows
+    (i.e. once per flagged page), not once per document, each region's rows
     are extracted independently using the column mapping Phase 5 already
     discovered. Best-effort: callers should treat a raised
     TransactionExtractionError (or any network failure from the underlying
@@ -69,7 +69,7 @@ class TransactionExtractionService:
     succeeded.
 
     Takes an AIProvider rather than constructing a model client itself, same
-    as the other AI services — provider/model is a config concern."""
+    as the other AI services, provider/model is a config concern."""
 
     def __init__(self, provider: AIProvider | None = None):
         self.provider = provider or AIProvider(default_ai_provider_config())

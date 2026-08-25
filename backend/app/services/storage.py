@@ -63,7 +63,7 @@ def upload_statement(
 ) -> str:
     """Uploads a statement file to the user's own folder in the `statements` bucket,
     enforced by Supabase Storage RLS (same user-JWT trust model as avatars). The bucket
-    is private — unlike avatars, no public URL is returned. Returns the storage object
+    is private, unlike avatars, no public URL is returned. Returns the storage object
     path, which is what gets persisted as `Statement.storage_path`."""
     ext = ALLOWED_STATEMENT_TYPES.get(content_type)
     if ext is None:
@@ -97,7 +97,7 @@ def upload_statement(
 
 def get_statement_view_url(token: str, storage_path: str, expires_in: int = 120) -> str:
     """Returns a short-lived signed URL for viewing/downloading a statement file
-    straight from Supabase Storage — the bucket is private, so there is no standing
+    straight from Supabase Storage, the bucket is private, so there is no standing
     public URL to hand back the way avatars have."""
     response = httpx.post(
         f"{settings.supabase_url}/storage/v1/object/sign/{STATEMENT_BUCKET}/{storage_path}",

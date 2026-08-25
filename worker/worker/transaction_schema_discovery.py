@@ -44,7 +44,7 @@ def _system_prompt() -> str:
         "region of one or more pages of a financial statement. Each block is "
         "shown as [x0, y0, x1, y1] \"text\", in points from the page's "
         "top-left corner.\n\n"
-        "Figure out what a transaction record looks like in THIS document — "
+        "Figure out what a transaction record looks like in THIS document, "
         "table layouts vary wildly between banks (e.g. \"Date | Description | "
         "Amount\", or \"Transaction Date | Posting Date | Description | Debit "
         "| Credit | Balance\", or something else entirely). Identify the "
@@ -52,14 +52,14 @@ def _system_prompt() -> str:
         "column_2, ... left to right. Then map those columns onto these "
         "target fields: transaction_date (required), post_date (optional, "
         "only if a separate posting date column exists), description "
-        "(required), amount (required — a list, because some tables split "
+        "(required), amount (required, a list, because some tables split "
         "amount across separate Debit/Credit columns: give one entry per "
         "amount-bearing column, tagging each with semantics \"debit\" or "
         "\"credit\" when split, or a single entry with no semantics tag when "
         "there's just one signed amount column), and currency (optional, only "
-        "if a currency column exists — omit it if currency is only "
+        "if a currency column exists, omit it if currency is only "
         "mentioned elsewhere, not as its own column).\n\n"
-        "This is the JSON Schema your response must conform to — it describes "
+        "This is the JSON Schema your response must conform to, it describes "
         "the shape of the answer, it is NOT the answer itself. Respond with "
         "ONLY a JSON object that is a valid *instance* of this schema (actual "
         "values, not the schema's own \"$defs\"/\"properties\"/\"type\" "
@@ -71,14 +71,14 @@ def _system_prompt() -> str:
 class TransactionSchemaDiscoveryService:
     """TransactionSchemaDiscoveryService.discover(document, transaction_regions)
     -> TransactionSchemaDiscovery. Answers "what does a transaction look like
-    in this document?" — maps this document's actual table columns onto
+    in this document?", maps this document's actual table columns onto
     Transaction's fixed fields, format-agnostically. Not an extraction of any
     row's data. Best-effort: callers should treat a raised
     TransactionSchemaDiscoveryError (or any network failure from the
     underlying provider) as non-fatal to ingestion.
 
     Takes an AIProvider rather than constructing a model client itself, same
-    as the other AI services — provider/model is a config concern."""
+    as the other AI services, provider/model is a config concern."""
 
     def __init__(self, provider: AIProvider | None = None):
         self.provider = provider or AIProvider(default_ai_provider_config())

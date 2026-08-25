@@ -28,7 +28,7 @@ export async function signup(formData: FormData) {
   }
 
   if (data.session) {
-    // Project has email auto-confirm enabled — the user is already signed in.
+    // Project has email auto-confirm enabled, the user is already signed in.
     revalidatePath("/", "layout");
     redirect("/dashboard");
   }

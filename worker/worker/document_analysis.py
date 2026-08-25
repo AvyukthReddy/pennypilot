@@ -20,7 +20,7 @@ class DocumentSection(BaseModel):
 
 
 class DocumentAnalysis(BaseModel):
-    """What kind of statement this is and where its sections live — the answer to
+    """What kind of statement this is and where its sections live, the answer to
     "what is this document?", not a transaction extraction. A closed schema so the
     model can't hand back arbitrary JSON."""
 

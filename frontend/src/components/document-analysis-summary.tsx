@@ -95,7 +95,7 @@ export function DocumentAnalysisSummary({ statementId }: { statementId: string }
       .then((data) => {
         if (data) setAnalysis(data.document_analysis);
       });
-    // analysisRequest.run is stable (useCallback with no deps) — safe to omit.
+    // analysisRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statementId]);
 
@@ -114,7 +114,7 @@ export function DocumentAnalysisSummary({ statementId }: { statementId: string }
   if (!analysis) {
     return (
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        Not yet classified — analysis may still be running, or this statement was
+        Not yet classified. Analysis may still be running, or this statement was
         skipped (e.g. a scanned PDF with no extracted text).
       </p>
     );
