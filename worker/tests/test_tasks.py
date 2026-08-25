@@ -82,7 +82,7 @@ ANALYSIS_WITH_BALANCE = DocumentAnalysis(
     ending_balance=Decimal("992.58"),
 )
 
-# 1000 - 7.42 = 992.58 (matches VALID_EXTRACTION) — but the statement's
+# 1000 - 7.42 = 992.58 (matches VALID_EXTRACTION), but the statement's
 # actual ending balance is 977.16, so the initial extraction is short by
 # a second, missed transaction. Recovery should catch this.
 ANALYSIS_FOR_RECOVERY = DocumentAnalysis(
@@ -112,7 +112,7 @@ RECOVERED_EXTRACTION = TransactionExtraction(
 
 
 class _FakeUnderstandingService:
-    """Stand-in for DocumentUnderstandingService — no real network call.
+    """Stand-in for DocumentUnderstandingService, no real network call.
     `calls` is a shared list so tests can assert whether it ran at all."""
 
     def __init__(self, calls: list, result: DocumentAnalysis | None = None, error: Exception | None = None):
@@ -138,7 +138,7 @@ def _patch_understanding(monkeypatch, result=None, error=None):
 
 
 class _FakeRegionDetectionService:
-    """Stand-in for TransactionRegionDetectionService — no real network call."""
+    """Stand-in for TransactionRegionDetectionService, no real network call."""
 
     def __init__(
         self,
@@ -168,7 +168,7 @@ def _patch_region_detection(monkeypatch, result=None, error=None):
 
 
 class _FakeSchemaDiscoveryService:
-    """Stand-in for TransactionSchemaDiscoveryService — no real network call."""
+    """Stand-in for TransactionSchemaDiscoveryService, no real network call."""
 
     def __init__(
         self,
@@ -198,11 +198,11 @@ def _patch_schema_discovery(monkeypatch, result=None, error=None):
 
 
 class _FakeExtractionService:
-    """Stand-in for TransactionExtractionService — no real network call.
+    """Stand-in for TransactionExtractionService, no real network call.
     `results_by_page` lets a test vary the outcome per region (e.g. one page
     succeeds, another raises), falling back to a single `result`/`error` for
     every region when not given. `retry_results_by_page` is consulted
-    instead whenever `previous_attempt` is set — i.e. this is the corrective
+    instead whenever `previous_attempt` is set, i.e. this is the corrective
     re-extraction call, not the original one."""
 
     def __init__(
@@ -278,7 +278,7 @@ def _patch_extraction(
 
 
 class _FakeVerificationService:
-    """Stand-in for TransactionVerificationService — no real network call."""
+    """Stand-in for TransactionVerificationService, no real network call."""
 
     def __init__(
         self,
@@ -431,17 +431,23 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert row.currency == "USD"
 
     assert len(verification_calls) == 1
-    # No retry — extraction was only called once for the region.
+    # No retry, extraction was only called once for the region.
     assert len(extraction_calls) == 1
     assert statement.transaction_verification == {"valid": True, "issues": []}
 
-    # Financial validation is real (not mocked) — pure Python, no provider.
+    # Financial validation is real (not mocked), pure Python, no provider.
     assert statement.financial_validation == {
         "valid": True,
         "issues": [],
         "balance_check": None,
         "recovery_attempts": [],
     }
+
+    # Confidence is real (not mocked): pure Python, combines everything above.
+    confidence = statement.confidence
+    assert confidence["score"] == 1.0
+    assert confidence["status"] == "validated"
+    assert confidence["warnings"] == []
 
 
 def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch) -> None:
@@ -455,6 +461,8 @@ def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch
     # No document_analysis at all ⇒ region detection is never even reached.
     assert statement.transaction_regions is None
     assert statement.transaction_schema is None
+    # No transactions section to score ⇒ confidence is never computed.
+    assert statement.confidence is None
 
 
 def test_parse_statement_region_detection_failure_is_non_fatal(monkeypatch) -> None:
@@ -483,6 +491,9 @@ def test_parse_statement_skips_region_detection_without_transactions_section(mon
     assert region_calls == []
     assert statement.transaction_regions is None
     assert statement.transaction_schema is None
+    # document_analysis exists but flags no "transactions" section ⇒ still
+    # nothing to score.
+    assert statement.confidence is None
 
 
 def test_parse_statement_schema_discovery_failure_is_non_fatal(monkeypatch) -> None:
@@ -528,7 +539,7 @@ def test_parse_statement_scanned_pdf_flagged_not_failed(monkeypatch) -> None:
     assert statement.parse_error is None
     assert len(statement.pages) == 2
     assert statement.pages[0]["text_blocks"] == []
-    # Scanned/no-text documents skip understanding entirely — no point
+    # Scanned/no-text documents skip understanding entirely, no point
     # classifying a document with nothing extracted from it.
     assert calls == []
     assert statement.document_analysis is None
@@ -633,7 +644,7 @@ def test_parse_statement_financial_validation_detects_duplicate_across_regions(m
     _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
     _patch_region_detection(monkeypatch, result=two_regions)
     _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
-    # Both regions independently "find" the exact same transaction — a
+    # Both regions independently "find" the exact same transaction, a
     # realistic failure mode when adjacent regions overlap near a page break.
     _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
     _patch_verification(monkeypatch, result=VALID_VERIFICATION)

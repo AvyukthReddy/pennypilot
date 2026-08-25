@@ -5,6 +5,7 @@ from dataclasses import asdict
 import httpx
 
 from worker.celery_app import app
+from worker.confidence import compute_confidence
 from worker.db import SessionLocal
 from worker.document import Document, Page
 from worker.document_analysis import DocumentAnalysis
@@ -38,10 +39,11 @@ def ping() -> str:
 
 @app.task(name="worker.parse_statement")
 def parse_statement(statement_id: str, signed_url: str) -> None:
-    """Phase 1+2+3+4+5+6+7+8+9: document ingestion, analysis, understanding,
-    transaction-region detection, transaction-schema discovery, transaction
-    extraction, transaction verification, deterministic financial
-    validation, and targeted recovery. Downloads the stored file exactly as
+    """Phase 1+2+3+4+5+6+7+8+9+10: document ingestion, analysis,
+    understanding, transaction-region detection, transaction-schema
+    discovery, transaction extraction, transaction verification,
+    deterministic financial validation, targeted recovery, and a final
+    composite confidence score. Downloads the stored file exactly as
     uploaded (never modified), analyzes PDFs page-by-page (size, text,
     positioned text blocks, image regions), flags scanned/image-only
     documents, classifies what the document is (bank/credit-card statement,
@@ -56,11 +58,14 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
     TransactionVerificationService (re-extracting once with the found
     issues as correction feedback when invalid), runs a plain Python
     (non-AI) reconciliation pass over the result via validate_transactions,
-    and — when that reconciliation fails with a balance mismatch —
+    and, when that reconciliation fails with a balance mismatch,
     re-extracts the most-suspect region(s) one at a time via
     attempt_recovery until the numbers reconcile or every candidate has
-    been tried, before inserting the final rows into the transactions
-    table."""
+    been tried. Finally, compute_confidence combines all of the above
+    (extraction completeness, verification cleanliness, financial-
+    validation issues, balance reconciliation, structural consistency) into
+    one deterministic score before inserting the final rows into the
+    transactions table."""
     session = SessionLocal()
     try:
         stmt = session.get(StatementRow, uuid.UUID(statement_id))
@@ -75,7 +80,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
             response = httpx.get(signed_url, timeout=60)
             response.raise_for_status()
         except Exception:
-            # Never surface str(exc) here — it can embed the signed URL/token.
+            # Never surface str(exc) here, it can embed the signed URL/token.
             stmt.status = "failed"
             stmt.parse_error = "Failed to download the statement file."
             session.commit()
@@ -88,7 +93,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                 pages = analyze_pdf(data)
             except Exception:
                 stmt.status = "failed"
-                stmt.parse_error = "Could not read this PDF — it may be corrupt."
+                stmt.parse_error = "Could not read this PDF, it may be corrupt."
                 session.commit()
                 return
 
@@ -116,7 +121,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         )
 
         # Best-effort classification, not a transaction parser. Ingestion has
-        # already succeeded by this point — a failure here (missing API key,
+        # already succeeded by this point, a failure here (missing API key,
         # network error, model never returns valid JSON) must not fail the
         # statement, only leave it unclassified.
         document_analysis: DocumentAnalysis | None = None
@@ -127,7 +132,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                 logger.warning(
                     "statement %s: document understanding failed", statement_id, exc_info=True
                 )
-        # Same best-effort philosophy as document understanding above — a
+        # Same best-effort philosophy as document understanding above, a
         # failure here must not fail the statement, only leave it without
         # detected regions. Nothing to narrow if Phase 3 found no
         # "transactions" section (includes the needs_ocr/no-document_analysis
@@ -146,7 +151,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                     statement_id,
                     exc_info=True,
                 )
-        # Same best-effort philosophy again — a failure here must not fail
+        # Same best-effort philosophy again, a failure here must not fail
         # the statement, only leave it without a discovered schema. Nothing
         # to map if Phase 4 found no regions to narrow to.
         transaction_schema: TransactionSchemaDiscovery | None = None
@@ -162,7 +167,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                     exc_info=True,
                 )
         # Extraction runs once per detected region (i.e. once per flagged
-        # page), not once per document — each call only needs that page's
+        # page), not once per document, each call only needs that page's
         # cropped blocks plus the column mapping Phase 5 already discovered.
         # A single region failing (bad JSON after retries, network blip)
         # must not discard transactions already extracted from other
@@ -247,7 +252,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
 
         extracted_rows: list[TransactionRow] = _rows_from_extractions(extraction_by_page)
 
-        # Pure Python, no AI call — checks the final (possibly Phase-7-
+        # Pure Python, no AI call. Checks the final (possibly Phase-7-
         # corrected) transaction list for date/amount sanity, duplicates,
         # and (when the statement states one) balance reconciliation.
         # Purely diagnostic: never blocks persistence, never touches status.
@@ -261,10 +266,10 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                 )
 
         # When reconciliation failed with a balance mismatch, re-extract the
-        # most-suspect region(s) one at a time (cheap — one AI call each)
+        # most-suspect region(s) one at a time (cheap, one AI call each)
         # instead of leaving a known-bad statement alone or reprocessing
         # everything. Stops as soon as one candidate reconciles; gives up
-        # (keeping the original rows/validation) if none do. Best-effort —
+        # (keeping the original rows/validation) if none do. Best-effort,
         # attempt_recovery already isolates each candidate's own failures,
         # this try/except only guards against something unexpected.
         if (
@@ -290,6 +295,27 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
             except Exception:
                 logger.warning(
                     "statement %s: recovery failed", statement_id, exc_info=True
+                )
+
+        # Pure Python, no AI call. Combines the signals gathered above into
+        # one deterministic score, not an LLM self-report. Gated on the same
+        # condition as region detection: nothing to score when there was no
+        # "transactions" section to begin with.
+        confidence = None
+        if document_analysis and any(
+            section.type == "transactions" for section in document_analysis.sections
+        ):
+            try:
+                confidence = compute_confidence(
+                    document_analysis,
+                    transaction_regions,
+                    extraction_by_page,
+                    verification_by_page,
+                    financial_validation,
+                )
+            except Exception:
+                logger.warning(
+                    "statement %s: confidence computation failed", statement_id, exc_info=True
                 )
 
         stmt.page_count = page_count
@@ -319,6 +345,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         stmt.financial_validation = (
             financial_validation.model_dump(mode="json") if financial_validation else None
         )
+        stmt.confidence = confidence.model_dump(mode="json") if confidence else None
         stmt.status = "ingested"
         session.add_all(extracted_rows)
         session.commit()

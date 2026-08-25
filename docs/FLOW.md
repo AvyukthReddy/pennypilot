@@ -80,7 +80,7 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `processing`, and renders `parse_error` under the status line once parsing
    finishes (or fails/warns) — see "Statement parsing" below.
 
-## Statement ingestion, analysis, understanding, region detection, schema discovery, transaction extraction, verification, financial validation, and recovery (upload → Document → transactions, Phase 1+2+3+4+5+6+7+8+9)
+## Statement ingestion, analysis, understanding, region detection, schema discovery, transaction extraction, verification, financial validation, recovery, and confidence (upload → Document → transactions, Phase 1+2+3+4+5+6+7+8+9+10)
 
 Earlier parsing-pipeline attempts (`worker/worker/parsing/`) were deleted entirely —
 never committed, so no history to preserve. See `docs/DECISIONS.md`'s "Statement
@@ -271,20 +271,43 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
     it's the *final* (post-recovery, if any ran) row set that gets
     `session.add_all`'d into the `transactions` table. See
     `docs/DECISIONS.md`'s 2026-08-24 "Phase 9" entry.
+14. Gated on the same condition as step 8 (a `"transactions"` section was
+    flagged), `worker/worker/confidence.py`'s `compute_confidence`, plain
+    Python, no AI call, combines everything above into one score: fraction
+    of detected regions successfully extracted, fraction of extracted
+    regions whose *first* Phase-7 verification passed clean, a penalty per
+    non-`balance_mismatch` `FinancialValidationIssue`, whether the balance
+    reconciled (full credit; partial credit if only via Phase 9 recovery;
+    none if never), and the fraction of flagged-but-undetected transaction
+    pages (a Phase-3-to-Phase-4 gap none of the other components would
+    otherwise catch). Missing/inapplicable inputs count as neutral (`1.0`),
+    not penalized. The five equally-weighted components combine into `score`
+    (`0.0`-`1.0`) and a `status` (`validated`/`needs_review`/`unreliable`,
+    thresholds `0.9`/`0.7`, a separate vocabulary from
+    `Statement.status`, never touches it). Persisted as
+    `Statement.confidence` (`JSONB`, migration `b8c9d0e1f2a3`) in the same
+    `session.commit()`. See `docs/DECISIONS.md`'s 2026-08-24 "Phase 10"
+    entry.
 
-## Viewing extracted text blocks, document classification, detected regions, discovered schema, verification, and financial validation (statements page → document analysis)
+## Viewing confidence, extracted text blocks, document classification, detected regions, discovered schema, verification, and financial validation (statements page → document analysis)
 
 1. `components/statements-list.tsx` shows a "Text blocks" link per statement row when
    `status === "ingested"` and `content_type === "application/pdf"`, linking to
    `/statements/analysis?statement_id={id}&filename={filename}`.
 2. `frontend/src/app/statements/analysis/page.tsx` (server component, same auth-gate
    pattern as `/transactions`) renders, top to bottom:
-   `components/document-analysis-summary.tsx`, `components/
+   `components/confidence-view.tsx` (first, the headline verdict, above
+   everything else), `components/document-analysis-summary.tsx`, `components/
 transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    `components/transactions-view.tsx`,
    `components/transaction-verification-view.tsx`,
    `components/financial-validation-view.tsx`, then
-   `components/statement-pages-view.tsx`. The summary card GETs
+   `components/statement-pages-view.tsx`. The confidence section GETs
+   `GET /api/statements/{id}/confidence` via `statementsEndpoints.confidence`,
+   showing a colored status pill (`validated`/`needs_review`/`unreliable`)
+   plus the score as a percentage, a warnings list, and a five-component
+   breakdown, or an explanatory empty state when `score` is `null`. The
+   summary card GETs
    `GET /api/statements/{id}/analysis` (`backend/app/api/statements.py`, same
    ownership check as `/view`/`/pages`) via `statementsEndpoints.analysis`, showing
    `document_type`/institution/account/currency/period/beginning and ending
@@ -345,7 +368,12 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    `.get(...)` specifically since it's a key added after `financial_validation`
    itself already existed, so pre-Phase-9 persisted statements don't have it),
    validated against `StatementFinancialValidationRead`/
-   `FinancialValidationIssueRead`/`BalanceCheckRead`/`RecoveryAttemptRead`
+   `FinancialValidationIssueRead`/`BalanceCheckRead`/`RecoveryAttemptRead`;
+   `/confidence` returns `{ statement_id, score, status, warnings, breakdown }`
+   from `Statement.confidence` (unwrapping `{"score": ..., "status": ...,
+   "warnings": [...], "breakdown": {...}}`, `score`/`status`/`breakdown` are
+   `null` and `warnings` is `[]` when confidence hasn't been computed),
+   validated against `StatementConfidenceRead`/`ConfidenceBreakdownRead`
    (all in `backend/app/schemas/statement.py`). None of these
    are folded into `StatementRead` (used by the statements list) — each can be
    much larger than everything else in that response.

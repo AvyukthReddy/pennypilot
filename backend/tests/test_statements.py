@@ -800,6 +800,98 @@ def test_get_statement_financial_validation_defaults_recovery_attempts_when_abse
     assert response.json()["recovery_attempts"] == []
 
 
+def test_get_statement_confidence_requires_auth() -> None:
+    response = client.get(f"/api/statements/{uuid.uuid4()}/confidence")
+    assert response.status_code == 401
+
+
+def test_get_statement_confidence_rejects_other_users_statement(make_token) -> None:
+    other_user_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="not-mine.pdf",
+        storage_path="somewhere/not-mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        confidence=None,
+    )
+    _use_fake_db(FakeSession([other_user_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{other_user_statement.id}/confidence",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_statement_confidence_returns_null_when_not_yet_computed(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        confidence=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/confidence",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["score"] is None
+    assert body["status"] is None
+    assert body["warnings"] == []
+    assert body["breakdown"] is None
+
+
+def test_get_statement_confidence_returns_persisted_score(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        confidence={
+            "score": 0.667,
+            "status": "unreliable",
+            "warnings": ["Statement balance does not reconcile"],
+            "breakdown": {
+                "extraction": 1.0,
+                "verification": 1.0,
+                "financial_validation": 0.0,
+                "balance_reconciliation": 0.0,
+                "structural_consistency": 1.0,
+            },
+        },
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/confidence",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["score"] == 0.667
+    assert body["status"] == "unreliable"
+    assert body["warnings"] == ["Statement balance does not reconcile"]
+    assert body["breakdown"]["financial_validation"] == 0.0
+
+
 def test_delete_statement_rejects_other_users_statement(make_token) -> None:
     other_user_statement = Statement(
         id=uuid.uuid4(),
