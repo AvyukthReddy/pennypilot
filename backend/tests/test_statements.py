@@ -892,6 +892,174 @@ def test_get_statement_confidence_returns_persisted_score(make_token) -> None:
     assert body["breakdown"]["financial_validation"] == 0.0
 
 
+def test_get_statement_currency_requires_auth() -> None:
+    response = client.get(f"/api/statements/{uuid.uuid4()}/currency")
+    assert response.status_code == 401
+
+
+def test_get_statement_currency_rejects_other_users_statement(make_token) -> None:
+    other_user_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="not-mine.pdf",
+        storage_path="somewhere/not-mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+    )
+    _use_fake_db(FakeSession([other_user_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{other_user_statement.id}/currency",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_statement_currency_falls_back_to_default_when_nothing_known(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis=None,
+        currency=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/currency",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["currency"] == "USD"
+    assert body["source"] == "default"
+    assert body["detected_currency"] is None
+
+
+def test_get_statement_currency_uses_detected_value(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "currency": "EUR"},
+        currency=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/currency",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["currency"] == "EUR"
+    assert body["source"] == "detected"
+    assert body["detected_currency"] == "EUR"
+
+
+def test_get_statement_currency_prefers_user_override(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "currency": "EUR"},
+        currency="GBP",
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/currency",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["currency"] == "GBP"
+    assert body["source"] == "override"
+    assert body["detected_currency"] == "EUR"
+
+
+def test_update_statement_currency_requires_auth() -> None:
+    response = client.patch(f"/api/statements/{uuid.uuid4()}/currency", json={"currency": "GBP"})
+    assert response.status_code == 401
+
+
+def test_update_statement_currency_sets_override(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "currency": "EUR"},
+        currency=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.patch(
+        f"/api/statements/{own_statement.id}/currency",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"currency": "gbp"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["currency"] == "GBP"
+    assert body["source"] == "override"
+    assert own_statement.currency == "GBP"
+
+
+def test_update_statement_currency_clears_override(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "currency": "EUR"},
+        currency="GBP",
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.patch(
+        f"/api/statements/{own_statement.id}/currency",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"currency": None},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["currency"] == "EUR"
+    assert body["source"] == "detected"
+    assert own_statement.currency is None
+
+
 def test_delete_statement_rejects_other_users_statement(make_token) -> None:
     other_user_statement = Statement(
         id=uuid.uuid4(),

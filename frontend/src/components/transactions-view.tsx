@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { transactionsEndpoints } from "@/constants/endpoints/transactions.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
+import { useCurrency } from "@/components/currency-context";
+import { formatSignedCurrency } from "@/lib/format-currency";
 import { Skeleton } from "@/components/skeleton";
 
 const MAX_ROWS = 200;
@@ -25,12 +27,6 @@ type TransactionListResponse = {
   offset: number;
 };
 
-function formatAmount(amount: string): string {
-  const value = Number(amount);
-  const sign = value >= 0 ? "+" : "-";
-  return `${sign}$${Math.abs(value).toFixed(2)}`;
-}
-
 function TransactionsSkeleton() {
   return (
     <div className="flex flex-col gap-2">
@@ -45,6 +41,7 @@ export function TransactionsView({ statementId }: { statementId: string }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [total, setTotal] = useState(0);
   const listRequest = useApiRequest<TransactionListResponse>();
+  const { currency } = useCurrency();
 
   useEffect(() => {
     listRequest
@@ -105,7 +102,7 @@ export function TransactionsView({ statementId }: { statementId: string }) {
                         : "py-1.5 font-medium text-emerald-600 dark:text-emerald-400"
                     }
                   >
-                    {formatAmount(txn.amount)}
+                    {formatSignedCurrency(txn.amount, currency)}
                   </td>
                 </tr>
               );

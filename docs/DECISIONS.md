@@ -4,6 +4,35 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-25, Statement currency (user override + consistent formatting)
+
+Every amount on `/statements/analysis` was rendering as a bare number
+(transaction rows even hardcoded a "$" regardless of the statement's
+actual currency), and there was no way to correct a wrong or missing
+AI-detected currency. New `Statement.currency` (`String(3)`, nullable,
+migration `c9d0e1f2a3b4`) is a separate user override column, deliberately
+not overwriting `document_analysis.currency` (the AI's own read of the
+document): overwriting would lose the "what did the model actually see"
+signal and complicate any future re-analysis.
+
+`GET/PATCH /api/statements/{id}/currency` resolves one effective value:
+override, then AI-detected, then a `"USD"` default, returning which of the
+three it picked as `source` so the frontend can distinguish "you set this"
+from "we guessed" from "nothing was known." `PATCH` with `{"currency":
+null}` clears the override and reverts to auto-detect, rather than a
+separate delete endpoint, since it's the same resolution logic either way.
+
+Frontend: `lib/format-currency.ts` centralizes the amount-plus-unit
+formatting (a symbol for common codes, `"<code> <amount>"` for the rest,
+so the unit is never dropped) instead of leaving each view to format
+independently. `components/currency-context.tsx`'s `CurrencyProvider`
+fetches the effective currency once per page load and shares it via
+context across every section that displays an amount, so an edit in one
+place is immediately reflected everywhere instead of only the section that
+made the change. The editor is a dropdown sourced from a fixed
+`SUPPORTED_CURRENCIES` list, not a free-text field, so a save can never
+persist a value that isn't a real currency code.
+
 ## 2026-08-24, Phase 10: confidence (deterministic composite score)
 
 Phases 6-9 each produce their own diagnostic signal, but nothing combined

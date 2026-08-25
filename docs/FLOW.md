@@ -340,7 +340,7 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    `valid` with no issues, a type/description issue table plus a
    beginning/net-change/expected-vs-actual-ending balance breakdown when a
    balance check was run, a one-line recovery note ("Recovery: re-extracted
-   page 7 — resolved" / "Recovery attempted on pages 3, 7 — still unresolved")
+   page 7, resolved" / "Recovery attempted on pages 3, 7, still unresolved")
    when `recovery_attempts` is non-empty, or an explanatory empty state when
    validation hasn't run. The text-blocks viewer at the bottom GETs
    `GET /api/statements/{id}/pages` via `statementsEndpoints.pages`.
@@ -380,6 +380,22 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
 4. Each page in the text-blocks viewer renders as a collapsible `<details>` (first
    page open, rest collapsed) with a table of `text_blocks` —
    `x`/`y`/`width`/`height`/`text`.
+5. `components/currency-context.tsx`'s `CurrencyProvider` wraps the whole
+   page body and GETs `GET /api/statements/{id}/currency` via
+   `statementsEndpoints.currency` once on mount, sharing the result through
+   React context so `document-analysis-summary.tsx`, `transactions-view.tsx`,
+   and `financial-validation-view.tsx` all format their amounts with the
+   same value via `lib/format-currency.ts` (a symbol for common codes,
+   `"<code> <amount>"` for the rest). `components/currency-editor.tsx`, next
+   to the "View" button, renders that value plus its `source`
+   (`override`/`detected`/`default`) as a dropdown sourced from
+   `format-currency.ts`'s `SUPPORTED_CURRENCIES`; choosing one PATCHes the
+   same endpoint with `{ currency: code }` and updates the shared context so
+   every section re-renders with the new value immediately, no page reload.
+   The route resolves `Statement.currency` (a nullable user override), then
+   `document_analysis.currency` (AI-detected), then a `"USD"` default,
+   returning whichever it picked as `source`; `PATCH` with `{ currency: null
+   }` clears the override.
 
 ## Not yet wired
 

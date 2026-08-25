@@ -210,39 +210,30 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: Phase 10
-  confidence. `worker/worker/confidence.py`'s `compute_confidence(...)`
-  is a plain Python function (no AI call, no provider, matching
-  `financial_validation.py`'s shape) combining five equally-weighted
-  (`0.2` each) components into one score: **extraction** (fraction of
-  detected regions successfully extracted), **verification** (fraction of
-  extracted regions whose *first* Phase-7 verification passed clean, before
-  any corrective retry), **financial validation** (penalizes non-
-  `balance_mismatch` `FinancialValidationIssue`s), **balance
-  reconciliation** (full credit if reconciled with no recovery needed,
-  `0.8` if reconciled only via Phase 9 `recovery_attempts`, `0.0` if never
-  reconciled), and **structural consistency** (fraction of pages
-  `document_analysis` flagged as `"transactions"` that actually got a
-  detected region, the one component catching a Phase-3-to-Phase-4 gap none
-  of the other four would surface). Missing/inapplicable data counts as
-  neutral (`1.0`), not penalized. Gated on the same condition as region
-  detection: a scanned PDF or unclassified statement gets `confidence =
-  null`, not a misleadingly perfect score. `status` (`validated`/
-  `needs_review`/`unreliable`, thresholds `0.9`/`0.7`) deliberately doesn't
-  reuse `"failed"` and never touches `Statement.status`; it's a read-only
-  overlay, same as `financial_validation`. The persisted shape
-  (`{score, status, warnings, breakdown}`, new `Statement.confidence`
-  `JSONB`, migration `b8c9d0e1f2a3`) deliberately doesn't duplicate
-  `transactions` into the blob; that's what the existing `transactions`
-  table + `GET /api/transactions` are for. Exposed via a new
-  `GET /api/statements/{id}/confidence` and shown as the **first** section
-  on `/statements/analysis` (`components/confidence-view.tsx`, a colored
-  status pill, score percentage, warnings, and breakdown), the headline
-  verdict, not just another item in the pipeline's sequential order. See
-  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 10" entry. Worker: 86
-  tests pass (`cd worker && poetry run pytest -q`); ruff clean. Backend: 61
-  tests pass (`cd backend && poetry run pytest -q`), migration applied.
-  Frontend: `tsc --noEmit` and `eslint src/` both clean.
+- Nothing currently in flight. Last completed unit of work: editable
+  statement currency. New `Statement.currency` column (`String(3)`,
+  nullable, migration `c9d0e1f2a3b4`) is a user override, separate from
+  `document_analysis.currency` (AI-detected). `GET/PATCH
+  /api/statements/{id}/currency` resolves the effective value as override,
+  then detected, then a `"USD"` default, and returns which of the three
+  (`source`) it picked; `PATCH` with `{"currency": null}` clears the
+  override back to auto-detect. Every amount on `/statements/analysis`
+  (transaction rows, both balance summaries) now renders through
+  `frontend/src/lib/format-currency.ts`, which maps common codes to a
+  symbol and falls back to `"<code> <amount>"` for the rest, so nothing
+  shows a bare number. `components/currency-context.tsx`'s
+  `CurrencyProvider` fetches the effective currency once per page load and
+  shares it via context so every section stays in sync after an edit,
+  instead of each re-fetching independently. `components/
+  currency-editor.tsx` is a dropdown (not free text, to keep the value a
+  real currency code) sourced from `format-currency.ts`'s
+  `SUPPORTED_CURRENCIES` list, with a "Reset to auto-detected" action when
+  overridden. The analysis page also gained two section titles it was
+  missing ("Document analysis", "Raw data"), matching every other section.
+  See [DECISIONS.md](DECISIONS.md)'s 2026-08-25 "Statement currency"
+  entry. Worker unaffected. Backend: `.venv/Scripts/python.exe -m pytest
+  -q` passes (69 tests), migration applied, ruff clean. Frontend: `tsc
+  --noEmit` and `eslint src/` both clean.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not
   actually been run. Do that before relying on the containerized stack. (The

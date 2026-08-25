@@ -12,6 +12,8 @@ from app.models.statement import Statement
 from app.schemas.statement import (
     StatementAnalysisRead,
     StatementConfidenceRead,
+    StatementCurrencyRead,
+    StatementCurrencyUpdate,
     StatementFinancialValidationRead,
     StatementPagesRead,
     StatementRead,
@@ -24,6 +26,22 @@ from app.services.storage import delete_statement, get_statement_view_url, uploa
 # Signed URL passed to the parse task: long enough to survive a queue backlog,
 # short enough to limit the exposure window of a URL that grants file access.
 PARSE_TASK_URL_EXPIRY_SECONDS = 600
+
+# Fallback when neither a user override nor AI-detected currency is
+# available, so amount displays never show a bare, unit-less number.
+DEFAULT_CURRENCY = "USD"
+
+
+def _resolve_currency(statement: Statement) -> tuple[str, str, str | None]:
+    """Returns (effective_currency, source, detected_currency)."""
+    detected = (
+        statement.document_analysis.get("currency") if statement.document_analysis else None
+    )
+    if statement.currency:
+        return statement.currency, "override", detected
+    if detected:
+        return detected, "detected", detected
+    return DEFAULT_CURRENCY, "default", detected
 
 router = APIRouter()
 
@@ -234,6 +252,48 @@ def get_statement_confidence(
         "status": confidence["status"] if confidence else None,
         "warnings": confidence["warnings"] if confidence else [],
         "breakdown": confidence["breakdown"] if confidence else None,
+    }
+
+
+@router.get(
+    "/api/statements/{statement_id}/currency",
+    response_model=StatementCurrencyRead,
+)
+def get_statement_currency(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    currency, source, detected = _resolve_currency(statement)
+    return {
+        "statement_id": statement.id,
+        "currency": currency,
+        "source": source,
+        "detected_currency": detected,
+    }
+
+
+@router.patch(
+    "/api/statements/{statement_id}/currency",
+    response_model=StatementCurrencyRead,
+)
+def update_statement_currency(
+    statement_id: uuid.UUID,
+    body: StatementCurrencyUpdate,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    statement.currency = body.currency
+    db.commit()
+    db.refresh(statement)
+    currency, source, detected = _resolve_currency(statement)
+    return {
+        "statement_id": statement.id,
+        "currency": currency,
+        "source": source,
+        "detected_currency": detected,
     }
 
 
