@@ -38,7 +38,7 @@ def _system_prompt() -> str:
         "5. wrong debit/credit signs\n"
         "6. multi-line transactions that were incorrectly split into two "
         "rows or merged into one\n\n"
-        "This is the JSON Schema your response must conform to — it "
+        "This is the JSON Schema your response must conform to, it "
         "describes the shape of the answer, it is NOT the answer itself. "
         "Respond with ONLY a JSON object that is a valid *instance* of this "
         "schema (actual values, not the schema's own \"$defs\"/\"properties\""
@@ -56,12 +56,12 @@ class TransactionVerificationService:
     TransactionExtractionService may have gotten wrong (missing/duplicate
     rows, wrong dates/amounts/signs, split-or-merged multi-line rows).
     Best-effort: callers should treat a raised TransactionVerificationError
-    (or any network failure from the underlying provider) as non-fatal —
+    (or any network failure from the underlying provider) as non-fatal,
     a failed verification just means the original extraction is used as-is,
     uncorrected.
 
     Takes an AIProvider rather than constructing a model client itself, same
-    as the other AI services — provider/model is a config concern."""
+    as the other AI services, provider/model is a config concern."""
 
     def __init__(self, provider: AIProvider | None = None):
         self.provider = provider or AIProvider(default_ai_provider_config())

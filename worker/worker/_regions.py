@@ -10,7 +10,7 @@ from worker.transaction_regions import TransactionRegion
 
 def _blocks_in_region(page: Page, region: tuple[float, float, float, float]) -> list[TextBlock]:
     """Crops a page's text_blocks down to the ones actually inside a detected
-    transaction region (Phase 4) — a center-point test, not strict
+    transaction region (Phase 4), a center-point test, not strict
     containment, so a block that slightly straddles the boundary isn't
     dropped. Shared by every AI service that needs to see just a region's
     content (schema discovery, extraction), not whatever headers/footers/
@@ -41,7 +41,7 @@ def _image_for_region(page: Page, region: tuple[float, float, float, float]) -> 
 
 def _region_content(document: Document, region: TransactionRegion) -> list[dict]:
     """Builds the text-part-plus-optional-image-part content for a single
-    detected region — the coordinate-tagged text blocks inside it, plus
+    detected region, the coordinate-tagged text blocks inside it, plus
     (when available) the region cropped out of that page's rendered image.
     Shared by every AI service that operates on one region at a time
     (extraction, verification)."""

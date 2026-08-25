@@ -89,7 +89,7 @@ export function StatementsList() {
     listRequest.run(statementsEndpoints.list(), APP_METHOD.GET).then((data) => {
       if (data) setStatements(data);
     });
-    // listRequest.run is stable (useCallback with no deps) — safe to omit.
+    // listRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -104,7 +104,7 @@ export function StatementsList() {
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
-    // listRequest.run is stable (useCallback with no deps) — safe to omit.
+    // listRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statements]);
 
@@ -116,7 +116,7 @@ export function StatementsList() {
     setUploadError(null);
 
     if (file.size > MAX_STATEMENT_BYTES) {
-      setUploadError("File is too large — statements must be 20MB or smaller");
+      setUploadError("File is too large, statements must be 20MB or smaller");
       return;
     }
 
@@ -135,7 +135,7 @@ export function StatementsList() {
     setViewingId(id);
     // Open the tab synchronously on click so browsers don't treat the later
     // redirect (after the signed-URL request resolves) as a blocked popup.
-    // Can't pass noopener/noreferrer here — those make window.open() return
+    // Can't pass noopener/noreferrer here, those make window.open() return
     // null, which would leave us with no handle to redirect later.
     const viewerTab = window.open("", "_blank");
 

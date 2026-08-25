@@ -53,7 +53,7 @@ export function ProfileForm() {
     profileRequest.run(settingsEndpoints.profile(), APP_METHOD.GET).then((data) => {
       if (data) setProfile(data);
     });
-    // profileRequest.run is stable (useCallback with no deps) — safe to omit.
+    // profileRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -83,7 +83,7 @@ export function ProfileForm() {
     const upload = file.size > MAX_IMAGE_BYTES ? await compressImage(file, MAX_IMAGE_BYTES) : file;
 
     if (upload.size > MAX_IMAGE_BYTES) {
-      setImageError("Image is too large even after compression — try a smaller photo");
+      setImageError("Image is too large even after compression, try a smaller photo");
       return;
     }
 
@@ -155,7 +155,7 @@ export function ProfileForm() {
             {imageRequest.loading ? "Uploading…" : "Change photo"}
           </button>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            JPEG, PNG, or WebP — large images are compressed automatically.
+            JPEG, PNG, or WebP. Large images are compressed automatically.
           </p>
           {(imageError || imageRequest.error) && (
             <p className="text-xs text-red-600 dark:text-red-400" aria-live="polite">

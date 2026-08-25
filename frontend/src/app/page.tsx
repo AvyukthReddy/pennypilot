@@ -25,7 +25,7 @@ const features = [
     icon: <ReceiptIcon className="h-5 w-5" />,
     title: "Receipt & statement OCR",
     description:
-      "Snap a photo or upload a statement — PennyPilot reads it, extracts the line items, and files it for you.",
+      "Snap a photo or upload a statement, and PennyPilot reads it, extracts the line items, and files it for you.",
   },
   {
     icon: <SparkleIcon className="h-5 w-5" />,
@@ -70,7 +70,7 @@ const steps = [
     number: "03",
     title: "Act",
     description:
-      "Get budgets, forecasts, and anomaly alerts — and ask your data anything.",
+      "Get budgets, forecasts, and anomaly alerts, and ask your data anything.",
   },
 ];
 
@@ -93,7 +93,7 @@ export default async function Home() {
             Your money, <span className="bg-yellow-300 px-2 text-black">understood.</span>
           </h1>
           <p className="mt-4 max-w-xl text-lg text-zinc-600 dark:text-zinc-400">
-            PennyPilot is an AI financial copilot — it connects your accounts,
+            PennyPilot is an AI financial copilot. It connects your accounts,
             reads your receipts, and turns raw transactions into budgets,
             forecasts, and answers.
           </p>
@@ -126,8 +126,8 @@ export default async function Home() {
             Everything your money needs, in one copilot
           </h2>
           <p className="mt-3 text-zinc-600 dark:text-zinc-400">
-            From connecting accounts to answering questions about your spending
-            — PennyPilot handles the busywork so you can focus on decisions.
+            From connecting accounts to answering questions about your spending,
+            PennyPilot handles the busywork so you can focus on decisions.
           </p>
         </div>
 
@@ -173,7 +173,7 @@ export default async function Home() {
       </section>
 
       <footer className="px-6 py-10 text-center text-xs text-zinc-500 dark:text-zinc-500">
-        PennyPilot — AI Financial Copilot
+        PennyPilot, AI Financial Copilot
       </footer>
     </div>
   );

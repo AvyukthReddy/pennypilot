@@ -57,7 +57,7 @@ const parseErrorBody = async <TError>(response: Response, isBlob?: boolean): Pro
 
 type RequestOptions = {
   isBlob?: boolean;
-  /** Dedupe/cancel key. Defaults to `${method} ${apiUrl}` — the full URL, including
+  /** Dedupe/cancel key. Defaults to `${method} ${apiUrl}`, the full URL, including
    *  the query string, so two GETs that only differ by query params don't collide.
    *  Pass an explicit key to intentionally collapse requests (e.g. search-as-you-type). */
   abortKey?: string;
@@ -117,7 +117,7 @@ export const getResponseAsync = async <TSuccess = unknown, TError = { detail?: s
     }
     throw err;
   } finally {
-    // Only clean up if we're still the current owner of this key — an in-flight
+    // Only clean up if we're still the current owner of this key, an in-flight
     // request that lost a race (got superseded) must not delete the newer one's entry.
     if (ongoingRequests.get(requestKey) === controller) {
       ongoingRequests.delete(requestKey);

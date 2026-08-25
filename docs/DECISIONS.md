@@ -4,6 +4,57 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-24, Phase 10: confidence (deterministic composite score)
+
+Phases 6-9 each produce their own diagnostic signal, but nothing combined
+them into one answer to "how much should I trust this statement's
+extracted transactions?" New `worker/worker/confidence.py`'s
+`compute_confidence(...)`, a plain Python function, no AI call, matching
+`financial_validation.py`'s shape (schema + function together, nothing to
+inject), combines five equally-weighted (`0.2` each) components into one
+score: **extraction** (fraction of detected regions successfully
+extracted), **verification** (fraction of extracted regions whose *first*
+Phase-7 verification passed clean, before any corrective retry; a
+corrected region still counts as less clean than one that was right the
+first time), **financial validation** (penalizes non-`balance_mismatch`
+`FinancialValidationIssue`s), **balance reconciliation** (full credit if
+reconciled with no recovery needed, partial credit, `0.8`, if reconciled
+only after Phase 9's `recovery_attempts` kicked in, `0.0` if never
+reconciled), and **structural consistency** (fraction of pages
+`document_analysis` flagged as `"transactions"` that actually got a
+detected region, the one component that catches a Phase-3 to Phase-4 gap
+none of the other four would surface, since they all operate on regions
+that *did* get detected). Equal weighting is a deliberate, transparent
+default (not reverse-engineered from a target number), named constants,
+trivially retunable.
+
+**Missing/inapplicable data is neutral (`1.0`), not penalized.** No stated
+balance means nothing to reconcile, matching this pipeline's philosophy
+everywhere else. **Gated on the same condition as region detection**
+(`document_analysis` exists and flagged a `"transactions"` section): a
+scanned PDF or unclassified statement gets `confidence = null`, not a
+misleadingly perfect score for having nothing to complain about. Zero
+detected regions despite a flagged section isn't specially cased, it
+naturally falls out as a `0.0` structural-consistency score with a warning.
+
+**`status` (`validated` / `needs_review` / `unreliable`, thresholds `0.9`/
+`0.7`) deliberately doesn't reuse `"failed"`**, which already means
+something specific on `Statement.status` (pipeline *execution* state, not
+data quality). Confidence is a read-only overlay, same as
+`financial_validation`, and never touches `Statement.status` itself.
+
+**The persisted shape doesn't duplicate `transactions` into the JSONB
+blob.** The user's example JSON (`{status, transactions, confidence,
+warnings}`) is the conceptual final answer, but this codebase already has
+a `transactions` table + `GET /api/transactions` for that; duplicating
+rows into `Statement.confidence` would be pure redundancy. Persisted as
+`{score, status, warnings, breakdown}` (new `Statement.confidence` `JSONB`,
+migration `b8c9d0e1f2a3`), exposed via a new
+`GET /api/statements/{id}/confidence`, and shown as the **first** section
+on `/statements/analysis` (`components/confidence-view.tsx`, a colored
+status pill + score + warnings + breakdown), the headline verdict for the
+statement, not just another item in the pipeline's sequential order.
+
 ## 2026-08-24 — Phase 9: recovery (targeted re-extraction on balance mismatch)
 
 Phase 8 only reported a `balance_mismatch` — nothing acted on it. New

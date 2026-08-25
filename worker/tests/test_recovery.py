@@ -8,7 +8,7 @@ from worker.verification_issues import TransactionVerification
 
 
 class _FakeExtractionService:
-    """Stand-in for TransactionExtractionService — no real network call.
+    """Stand-in for TransactionExtractionService, no real network call.
     `results_by_page` (page -> TransactionExtraction | Exception) drives
     what a recovery attempt on that page produces."""
 

@@ -150,3 +150,19 @@ class StatementFinancialValidationRead(BaseModel):
     issues: list[FinancialValidationIssueRead]
     balance_check: BalanceCheckRead | None
     recovery_attempts: list[RecoveryAttemptRead] = []
+
+
+class ConfidenceBreakdownRead(BaseModel):
+    extraction: float
+    verification: float
+    financial_validation: float
+    balance_reconciliation: float
+    structural_consistency: float
+
+
+class StatementConfidenceRead(BaseModel):
+    statement_id: uuid.UUID
+    score: float | None
+    status: Literal["validated", "needs_review", "unreliable"] | None
+    warnings: list[str]
+    breakdown: ConfidenceBreakdownRead | None

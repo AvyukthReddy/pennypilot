@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { ConfidenceView } from "@/components/confidence-view";
 import { DocumentAnalysisSummary } from "@/components/document-analysis-summary";
 import { FinancialValidationView } from "@/components/financial-validation-view";
 import { Navbar } from "@/components/navbar";
@@ -52,6 +53,13 @@ export default async function StatementAnalysisPage({
           </div>
           <StatementViewButton statementId={statementId} />
         </div>
+
+        <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
+          <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
+            Confidence
+          </h2>
+          <ConfidenceView statementId={statementId} />
+        </section>
 
         <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
           <DocumentAnalysisSummary statementId={statementId} />

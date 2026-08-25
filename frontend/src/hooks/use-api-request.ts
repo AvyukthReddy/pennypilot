@@ -23,9 +23,9 @@ function extractErrorMessage(data: unknown, fallback: string): string {
  *
  * `run` resolves to the parsed success data, or `undefined` on failure
  * (including a request superseded/unmounted mid-flight, which is treated as
- * silent — `error`/`status` are only set for real failures). For an
+ * silent; `error`/`status` are only set for real failures). For an
  * `if (data) {...} else {...}` shape, the else branch reads `error`/`status`
- * from the hook instead of a raw `response` — `run` doesn't return one.
+ * from the hook instead of a raw `response`; `run` doesn't return one.
  */
 export function useApiRequest<TSuccess = unknown, TError = { detail?: string }>() {
   const [loading, setLoading] = useState(false);
@@ -34,14 +34,14 @@ export function useApiRequest<TSuccess = unknown, TError = { detail?: string }>(
   // True once a call that wasn't superseded by a newer one has settled
   // (succeeded or failed) at least once. Callers gate empty-state messages
   // on this instead of `!loading`, so a stale/aborted call from a dev-mode
-  // Strict Mode double-invoke (or any rapid re-fetch) can't flip it early —
+  // Strict Mode double-invoke (or any rapid re-fetch) can't flip it early,
   // see the `latestCallId` guard below.
   const [hasSettled, setHasSettled] = useState(false);
   const unmountController = useRef<AbortController | undefined>(undefined);
   // Bumped on every run() call; a call only gets to touch shared state if
   // it's still the most recent one when it finishes. Otherwise it was
   // superseded by a newer request for the same key (app.service.ts aborts
-  // the old one) and must stay silent — including not touching `loading`,
+  // the old one) and must stay silent, including not touching `loading`,
   // which would otherwise flip false while the newer call is still pending.
   const latestCallId = useRef(0);
 

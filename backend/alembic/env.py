@@ -26,7 +26,7 @@ def include_object(object, _name, type_, _reflected, _compare_to):
     """Exclude Supabase-managed schemas (e.g. "auth") from autogenerate diffing.
 
     Our models reference auth.users via a foreign key, but we don't own or
-    migrate that table — only "public" is ours to manage.
+    migrate that table, only "public" is ours to manage.
     """
     if type_ == "table" and getattr(object, "schema", None) == "auth":
         return False

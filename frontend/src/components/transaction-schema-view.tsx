@@ -67,7 +67,7 @@ export function TransactionSchemaView({ statementId }: { statementId: string }) 
       .then((data) => {
         if (data) setFields(data.transaction_fields);
       });
-    // schemaRequest.run is stable (useCallback with no deps) — safe to omit.
+    // schemaRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statementId]);
 
@@ -86,7 +86,7 @@ export function TransactionSchemaView({ statementId }: { statementId: string }) 
   if (!fields) {
     return (
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        No transaction schema discovered yet — either discovery hasn&apos;t run yet, or
+        No transaction schema discovered yet. Either discovery hasn&apos;t run yet, or
         no transaction regions were detected on this statement.
       </p>
     );

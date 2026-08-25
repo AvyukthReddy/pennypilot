@@ -4,7 +4,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from app.core.db import Base
 
 # Minimal reference to Supabase's auth.users table so our models can declare
-# foreign keys to it. Not managed by our migrations — see env.py's
+# foreign keys to it. Not managed by our migrations, see env.py's
 # include_object filter, which excludes the "auth" schema from autogenerate.
 auth_users = Table(
     "users",

@@ -14,7 +14,7 @@ TEST_USER_ID = "11111111-1111-4111-8111-111111111111"
 
 
 class FakeSession:
-    """Preloaded with exactly what the query should return — same convention
+    """Preloaded with exactly what the query should return, same convention
     as test_statements.py's FakeSession: this exercises the endpoint's
     response assembly, not the real WHERE-clause filtering (which is
     standard SQLAlchemy `.where()` usage, not custom logic worth re-proving

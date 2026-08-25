@@ -44,9 +44,9 @@ function formatRecoveryNote(attempts: RecoveryAttempt[]): string {
   const succeededPage = attempts.find((a) => a.succeeded)?.page;
   const pages = attempts.map((a) => a.page).join(", ");
   if (succeededPage !== undefined) {
-    return `Recovery: re-extracted page ${succeededPage} — resolved`;
+    return `Recovery: re-extracted page ${succeededPage}, resolved`;
   }
-  return `Recovery attempted on page${attempts.length > 1 ? "s" : ""} ${pages} — still unresolved`;
+  return `Recovery attempted on page${attempts.length > 1 ? "s" : ""} ${pages}, still unresolved`;
 }
 
 const ISSUE_LABELS: Record<FinancialIssueType, string> = {
@@ -76,7 +76,7 @@ export function FinancialValidationView({ statementId }: { statementId: string }
       .then((data) => {
         if (data) setReport(data);
       });
-    // validationRequest.run is stable (useCallback with no deps) — safe to omit.
+    // validationRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statementId]);
 
@@ -95,7 +95,7 @@ export function FinancialValidationView({ statementId }: { statementId: string }
   if (!report || report.valid === null) {
     return (
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        No financial validation has run yet — either extraction hasn&apos;t run, or
+        No financial validation has run yet. Either extraction hasn&apos;t run, or
         no transactions were extracted to check.
       </p>
     );
@@ -105,7 +105,7 @@ export function FinancialValidationView({ statementId }: { statementId: string }
     <div className="flex flex-col gap-3">
       {report.valid && report.issues.length === 0 ? (
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          All checks passed — no issues found.
+          All checks passed, no issues found.
         </p>
       ) : (
         <div className="overflow-x-auto">

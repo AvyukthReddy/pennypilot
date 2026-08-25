@@ -14,7 +14,7 @@ export function StatementViewButton({ statementId }: { statementId: string }) {
     setViewingId(id);
     // Open the tab synchronously on click so browsers don't treat the later
     // redirect (after the signed-URL request resolves) as a blocked popup.
-    // Can't pass noopener/noreferrer here — those make window.open() return
+    // Can't pass noopener/noreferrer here, those make window.open() return
     // null, which would leave us with no handle to redirect later.
     const viewerTab = window.open("", "_blank");
 

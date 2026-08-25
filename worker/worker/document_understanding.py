@@ -31,7 +31,7 @@ def _system_prompt() -> str:
         "You are classifying a financial statement document. Given the text of "
         "each page, determine what kind of document it is and identify its "
         "sections.\n\n"
-        "This is the JSON Schema your response must conform to — it describes "
+        "This is the JSON Schema your response must conform to, it describes "
         "the shape of the answer, it is NOT the answer itself. Respond with "
         "ONLY a JSON object that is a valid *instance* of this schema (actual "
         "values, not the schema's own \"$defs\"/\"properties\"/\"type\" "
@@ -41,18 +41,18 @@ def _system_prompt() -> str:
         "for document_type). `sections` should cover the pages you were shown, "
         "grouped by what kind of content they contain. If an account summary "
         "states a beginning and/or ending balance for the statement period, "
-        "extract those too as beginning_balance/ending_balance — null if no "
+        "extract those too as beginning_balance/ending_balance, null if no "
         "balance summary is visible."
     )
 
 
 class DocumentUnderstandingService:
     """DocumentUnderstandingService.analyze(document) -> DocumentAnalysis.
-    Answers "what is this document?" — not a transaction extraction. Best-effort:
+    Answers "what is this document?", not a transaction extraction. Best-effort:
     callers should treat a raised DocumentUnderstandingError (or any network
     failure from the underlying provider) as non-fatal to ingestion.
 
-    Takes an AIProvider rather than constructing a model client itself — which
+    Takes an AIProvider rather than constructing a model client itself, which
     provider/model actually runs is a config concern (worker.config), not
     something this pipeline should know or hard-code."""
 

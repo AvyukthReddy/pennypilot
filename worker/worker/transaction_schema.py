@@ -7,7 +7,7 @@ Semantics = Literal["debit", "credit", "amount"]
 
 class FieldSource(BaseModel):
     """Where one target field's value actually lives in this document's table
-    — a positional label the model assigns itself (left to right, from the
+   , a positional label the model assigns itself (left to right, from the
     coordinates it's shown), not something we pre-compute."""
 
     source: str  # e.g. "column_1"
@@ -16,7 +16,7 @@ class FieldSource(BaseModel):
 
 class TransactionFields(BaseModel):
     """Maps this document's actual columns onto Transaction's fixed fields
-    (backend/app/models/transaction.py) — the answer to "what does a
+    (backend/app/models/transaction.py), the answer to "what does a
     transaction look like here?", not an extraction of any row's data.
     `amount` is a list because some tables split it across separate
     Debit/Credit columns; a single target field then needs two sources,

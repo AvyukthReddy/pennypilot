@@ -69,7 +69,7 @@ export function TransactionsList({
         setTotal(data.total);
         setTransactions(data.items);
       });
-    // listRequest.run is stable (useCallback with no deps) — safe to omit.
+    // listRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statementId]);
 

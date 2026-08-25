@@ -22,7 +22,7 @@ class TransactionRegionDetectionError(Exception):
 
 
 def _candidate_pages(document: Document, document_analysis: DocumentAnalysis) -> list[Page]:
-    """Only the pages Phase 3 already flagged as "transactions" — the whole
+    """Only the pages Phase 3 already flagged as "transactions", the whole
     point of this step is narrowing further within that set, not redoing
     Phase 3's page-level classification."""
     transaction_page_numbers = {
@@ -60,12 +60,12 @@ def _system_prompt() -> str:
         "somewhere on the page. Each block is shown as "
         "[x0, y0, x1, y1] \"text\", in points from the page's top-left corner.\n\n"
         "For each page, find the single bounding region that contains the "
-        "transaction table itself — excluding page headers, footers, logos, "
+        "transaction table itself, excluding page headers, footers, logos, "
         "and margins. Use the same coordinate space you were given. A "
-        "page's rendered image may accompany its text blocks — when "
+        "page's rendered image may accompany its text blocks, when "
         "present, use it to visually cross-check the region you pick "
         "against the text-derived coordinates.\n\n"
-        "This is the JSON Schema your response must conform to — it describes "
+        "This is the JSON Schema your response must conform to, it describes "
         "the shape of the answer, it is NOT the answer itself. Respond with "
         "ONLY a JSON object that is a valid *instance* of this schema (actual "
         "values, not the schema's own \"$defs\"/\"properties\"/\"type\" "
@@ -78,13 +78,13 @@ def _system_prompt() -> str:
 class TransactionRegionDetectionService:
     """TransactionRegionDetectionService.detect(document, document_analysis) ->
     TransactionRegionDetection. Narrows Phase 3's page-level "transactions"
-    sections down to an exact bounding region per page — the reduction step
+    sections down to an exact bounding region per page, the reduction step
     before real line-item extraction. Best-effort: callers should treat a
     raised TransactionRegionDetectionError (or any network failure from the
     underlying provider) as non-fatal to ingestion.
 
     Takes an AIProvider rather than constructing a model client itself, same
-    as DocumentUnderstandingService — provider/model is a config concern."""
+    as DocumentUnderstandingService, provider/model is a config concern."""
 
     def __init__(self, provider: AIProvider | None = None):
         self.provider = provider or AIProvider(default_ai_provider_config())

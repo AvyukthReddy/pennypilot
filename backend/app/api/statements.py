@@ -11,6 +11,7 @@ from app.core.security import CurrentUser, get_current_user
 from app.models.statement import Statement
 from app.schemas.statement import (
     StatementAnalysisRead,
+    StatementConfidenceRead,
     StatementFinancialValidationRead,
     StatementPagesRead,
     StatementRead,
@@ -97,8 +98,8 @@ def upload_statement_file(
         enqueue_parse_statement(statement_id=str(statement.id), signed_url=signed_url)
     except Exception:
         # The upload already succeeded and is durably stored; failing to kick off
-        # parsing shouldn't fail the request. The statement simply stays "uploaded"
-        # — a documented, meaningful state ("file exists, parsing not queued yet") —
+        # parsing shouldn't fail the request. The statement simply stays "uploaded",
+        # a documented, meaningful state ("file exists, parsing not queued yet"),
         # rather than a silent, undocumented dead end. No automatic retry this pass.
         pass
     else:
@@ -210,9 +211,29 @@ def get_statement_financial_validation(
         "valid": validation["valid"] if validation else None,
         "issues": validation["issues"] if validation else [],
         "balance_check": validation["balance_check"] if validation else None,
-        # .get, not [] — statements ingested before Phase 9 have a persisted
+        # .get, not []: statements ingested before Phase 9 have a persisted
         # financial_validation blob with no recovery_attempts key at all.
         "recovery_attempts": validation.get("recovery_attempts", []) if validation else [],
+    }
+
+
+@router.get(
+    "/api/statements/{statement_id}/confidence",
+    response_model=StatementConfidenceRead,
+)
+def get_statement_confidence(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    confidence = statement.confidence
+    return {
+        "statement_id": statement.id,
+        "score": confidence["score"] if confidence else None,
+        "status": confidence["status"] if confidence else None,
+        "warnings": confidence["warnings"] if confidence else [],
+        "breakdown": confidence["breakdown"] if confidence else None,
     }
 
 

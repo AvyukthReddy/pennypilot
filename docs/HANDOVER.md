@@ -45,8 +45,8 @@ request-flow maps).
   navbar. Uploads are deduplicated by SHA-256 (`Statement.file_hash`) — re-uploading
   the same file for the same user returns `409`.
 - **Statement ingestion, analysis, understanding, region detection, schema
-  discovery, transaction extraction, verification, financial validation, and
-  recovery (Phase 1+2+3+4+5+6+7+8+9)**: after upload, a Celery
+  discovery, transaction extraction, verification, financial validation,
+  recovery, and confidence (Phase 1+2+3+4+5+6+7+8+9+10)**: after upload, a Celery
   task (`worker.parse_statement`) downloads the stored file unmodified, then for
   PDFs runs `worker/worker/pdf_analysis.py`'s `analyze_pdf` (via `pdfplumber`) to
   produce a `Page` per page (`worker/worker/document.py` — `width`/`height`/
@@ -104,42 +104,57 @@ request-flow maps).
   after each, stopping on the first candidate that reconciles; every
   candidate tried lands in `FinancialValidation.recovery_attempts`
   (`page`/`succeeded`) regardless of outcome, and it's the final
-  (post-recovery, if any ran) row set that actually gets inserted.
+  (post-recovery, if any ran) row set that actually gets inserted. Finally,
+  gated on the same condition as region detection,
+  `worker/worker/confidence.py`'s `compute_confidence`, also plain Python,
+  no AI call, combines extraction completeness, verification cleanliness,
+  financial-validation issue count, balance reconciliation (including
+  whether recovery was needed), and structural consistency (did every
+  flagged page get a detected region) into one equally-weighted (`0.2`
+  each) `score` and a `status` (`validated`/`needs_review`/`unreliable`,
+  its own vocabulary, never touches `Statement.status`).
   `Statement.page_count`/`parser_version`/
   `needs_ocr`/`pages`/`document_analysis`/`transaction_regions`/
-  `transaction_schema`/`transaction_verification`/`financial_validation` all
-  get persisted (the six JSON-shaped ones as `JSONB`, migrations
+  `transaction_schema`/`transaction_verification`/`financial_validation`/
+  `confidence` all
+  get persisted (the seven JSON-shaped ones as `JSONB`, migrations
   `b2e3d4f5a6c7`/`c3f4a5b6d7e8`/`d4e5f6a7b8c9`/`e5f6a7b8c9d0`/
-  `f6a7b8c9d0e1`/`a7b8c9d0e1f2` — `recovery_attempts` is a new key inside
-  the existing `financial_validation` blob, no migration of its own),
+  `f6a7b8c9d0e1`/`a7b8c9d0e1f2`/`b8c9d0e1f2a3`, `recovery_attempts` is a
+  new key inside the existing `financial_validation` blob, no migration of
+  its own),
   `status` becomes `"ingested"` (a scanned
   PDF, or any AI step failing, still succeeds — each is independently
   best-effort/non-fatal, and extraction/verification are best-effort *per
   region*, so one page failing doesn't discard another page's
-  already-extracted transactions; financial validation and recovery are
-  purely diagnostic/corrective and never touch `status` either way), and
+  already-extracted transactions; financial validation, recovery, and
+  confidence are purely diagnostic/corrective and never touch `status`
+  either way), and
   every successfully extracted
   (and possibly corrected/recovered) row is inserted into the `transactions` table
   (`worker/worker/models.py`'s `TransactionRow`). Earlier parsing-pipeline
   attempts were deleted entirely (never committed, so no history to
-  preserve). See [DECISIONS.md](DECISIONS.md)'s "Phase 9: recovery", "Phase
+  preserve). See [DECISIONS.md](DECISIONS.md)'s "Phase 10: confidence",
+  "Phase 9: recovery", "Phase
   8: deterministic financial validation", "Phase 7: transaction
   verification", "Phase
   6: transaction extraction", "Phase 5: transaction schema discovery", "Phase
   4: transaction region detection", "Phase 3: document understanding",
   "Persist `Statement.pages`", "Phase 2: PDF document analysis", and
   "Statement parsing scoped down to Phase 1" entries.
-- **Viewing extracted text blocks, document classification, detected regions,
+- **Viewing confidence, extracted text blocks, document classification, detected regions,
   discovered schema, verification report, and financial validation**:
   `GET /api/statements/{id}/pages`, `/analysis`, `/transaction-regions`,
-  `/transaction-schema`, `/transaction-verification`, and
-  `/financial-validation` (`backend/app/api/statements.py`) return a
+  `/transaction-schema`, `/transaction-verification`,
+  `/financial-validation`, and `/confidence` (`backend/app/api/statements.py`) return a
   statement's persisted `pages`/`document_analysis`/`transaction_regions`/
-  `transaction_schema`/`transaction_verification`/`financial_validation`
+  `transaction_schema`/`transaction_verification`/`financial_validation`/
+  `confidence`
   (same ownership check as `/view`). Frontend: a
   "Text blocks" link per statement row (`components/statements-list.tsx`,
   shown for `status === "ingested"` PDFs) opens `/statements/analysis`, which
-  renders, top to bottom: `components/document-analysis-summary.tsx`
+  renders, top to bottom: `components/confidence-view.tsx` (first, a
+  colored status pill, score percentage, warnings, and a five-component
+  breakdown, or an explanatory empty state), `components/document-analysis-summary.tsx`
   (document type/institution/account/currency/period/beginning and ending
   balance + section list, or "Not
   yet classified"), `components/transaction-regions-view.tsx` (page/region
@@ -163,7 +178,7 @@ request-flow maps).
 - **Worker**: `worker/` (Celery) has one task (`worker.parse_statement`,
   `worker/worker/tasks.py`, ingestion + analysis + understanding + region
   detection + schema discovery + transaction extraction + verification +
-  financial validation + recovery) with
+  financial validation + recovery + confidence) with
   its own DB
   access layer (`worker/worker/config.py`, `db.py`, `models.py` — hand-mirrored,
   non-authoritative mappings; Alembic in `backend/` remains the sole schema
@@ -195,35 +210,39 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: Phase 9
-  recovery — `worker/worker/recovery.py`'s `attempt_recovery(...)` reacts
-  to a Phase 8 `balance_mismatch` by re-extracting one region at a time
-  (regions with no successful Phase-7 verification record tried first,
-  then the rest in page order), re-running `validate_transactions` after
-  each, and stopping on the first candidate that reconciles — bounding the
-  cost to at most one extra AI call per region instead of reprocessing the
-  whole document. Every candidate tried (whether it succeeded or not) is
-  recorded in new `FinancialValidation.recovery_attempts: list[RecoveryAttempt]`
-  (`page`, `succeeded`). `TransactionExtractionService.extract` gained a
-  third, independent correction pathway — `recovery_hint: str | None` —
-  alongside Phase 7's `previous_attempt`/`verification_issues` pair; it
-  doesn't require a `previous_attempt`, since recovery must also work for a
-  region whose original extraction failed outright. Only re-extracts, does
-  *not* re-verify (Phase 7) — `validate_transactions` alone decides whether
-  a recovery attempt worked, matching the user's own diagram exactly.
-  `tasks.py`'s per-region loop now keys its results by page
-  (`extraction_by_page`/`verification_by_page` dicts) instead of flattening
-  straight into a rows list, since recovery needs to replace one region's
-  contribution and rebuild the list. No new migration —
-  `recovery_attempts` is a new key inside the existing
-  `Statement.financial_validation` JSONB blob, read with `.get(...)` in the
-  API route for compatibility with statements ingested before this phase.
-  Surfaced on `/statements/analysis` via a one-line note in
-  `components/financial-validation-view.tsx`. See
-  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 9" entry. Worker: 75
-  tests pass (`cd worker && poetry run pytest -q`); ruff clean. Backend: 57
-  tests pass (`cd backend && poetry run pytest -q`; no migration this
-  round). Frontend: `tsc --noEmit` and `eslint src/` both clean.
+- Nothing currently in flight. Last completed unit of work: Phase 10
+  confidence. `worker/worker/confidence.py`'s `compute_confidence(...)`
+  is a plain Python function (no AI call, no provider, matching
+  `financial_validation.py`'s shape) combining five equally-weighted
+  (`0.2` each) components into one score: **extraction** (fraction of
+  detected regions successfully extracted), **verification** (fraction of
+  extracted regions whose *first* Phase-7 verification passed clean, before
+  any corrective retry), **financial validation** (penalizes non-
+  `balance_mismatch` `FinancialValidationIssue`s), **balance
+  reconciliation** (full credit if reconciled with no recovery needed,
+  `0.8` if reconciled only via Phase 9 `recovery_attempts`, `0.0` if never
+  reconciled), and **structural consistency** (fraction of pages
+  `document_analysis` flagged as `"transactions"` that actually got a
+  detected region, the one component catching a Phase-3-to-Phase-4 gap none
+  of the other four would surface). Missing/inapplicable data counts as
+  neutral (`1.0`), not penalized. Gated on the same condition as region
+  detection: a scanned PDF or unclassified statement gets `confidence =
+  null`, not a misleadingly perfect score. `status` (`validated`/
+  `needs_review`/`unreliable`, thresholds `0.9`/`0.7`) deliberately doesn't
+  reuse `"failed"` and never touches `Statement.status`; it's a read-only
+  overlay, same as `financial_validation`. The persisted shape
+  (`{score, status, warnings, breakdown}`, new `Statement.confidence`
+  `JSONB`, migration `b8c9d0e1f2a3`) deliberately doesn't duplicate
+  `transactions` into the blob; that's what the existing `transactions`
+  table + `GET /api/transactions` are for. Exposed via a new
+  `GET /api/statements/{id}/confidence` and shown as the **first** section
+  on `/statements/analysis` (`components/confidence-view.tsx`, a colored
+  status pill, score percentage, warnings, and breakdown), the headline
+  verdict, not just another item in the pipeline's sequential order. See
+  [DECISIONS.md](DECISIONS.md)'s 2026-08-24 "Phase 10" entry. Worker: 86
+  tests pass (`cd worker && poetry run pytest -q`); ruff clean. Backend: 61
+  tests pass (`cd backend && poetry run pytest -q`), migration applied.
+  Frontend: `tsc --noEmit` and `eslint src/` both clean.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not
   actually been run. Do that before relying on the containerized stack. (The
@@ -245,8 +264,9 @@ request-flow maps).
 - **No OCR/vision exists.** `Statement.needs_ocr` gets set for scanned/image-only
   PDFs, but nothing acts on it yet — flagged only, not processed. Document
   understanding, transaction region detection, schema discovery, extraction,
-  verification, financial validation (no transactions to check), and
-  recovery (nothing to validate, so nothing to recover from) are all
+  verification, financial validation (no transactions to check),
+  recovery (nothing to validate, so nothing to recover from), and
+  confidence (same gating as region detection, nothing to score) are all
   skipped entirely for these too (see above).
 - **All five AI steps need `MODEL_API_KEY`** (or the `MODEL_PROVIDER`-specific
   `OPENROUTER_API_KEY`/`HUGGINGFACE_API_KEY` — see `worker/worker/config.py`).
@@ -289,16 +309,18 @@ request-flow maps).
 
 - OCR/vision for scanned PDFs (`Statement.needs_ocr=true`) — detection exists,
   nothing consumes the flag yet, and document understanding/region detection/
-  schema discovery/extraction/verification/financial validation/recovery are
+  schema discovery/extraction/verification/financial validation/recovery/
+  confidence are
   all skipped for these too. Also
   not yet scoped (which OCR engine/vision API, whether it produces the same
   `Page`/`text_blocks` shape or something else).
 - Transaction categorization (AI/merchant-based) and a full transaction-editing
-  UI — the `transactions` table now actually gets populated, checked, and
-  self-corrected (Phase 6+7+8+9), so this is the natural next
+  UI. The `transactions` table now actually gets populated, checked,
+  self-corrected, and scored for confidence (Phase 6+7+8+9+10), so this is
+  the natural next
   consumer-facing feature.
 - Dedup/idempotency guard on statement reprocessing — see "Known broken" above.
-- Surfacing `financial_validation`/`transaction_verification` issues
+- Surfacing `financial_validation`/`transaction_verification`/`confidence`
   somewhere a real user would see them (not just the debug
   `/statements/analysis` view) — e.g. a warning badge on the statements list
   — once there's a concrete product need for it.
@@ -307,5 +329,9 @@ request-flow maps).
   the other `FinancialValidationIssue` types ever need the same kind of
   self-correction, that's a separate design question (they already point at
   a specific transaction, not a whole region).
+- The five confidence-component weights are equal (`0.2` each) by
+  deliberate default, not tuned against any real-world outcome data; worth
+  revisiting once there's a corpus of real statements to check the score
+  against.
 - Run the Docker build once Docker Desktop is available (see "In progress" above) —
   note the worker image will need to build `pydantic`/`openai` now too.
