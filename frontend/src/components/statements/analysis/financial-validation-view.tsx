@@ -5,9 +5,10 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { useCurrency } from "@/components/currency-context";
+import { useCurrency } from "@/components/statements/analysis/currency-context";
 import { formatCurrency } from "@/lib/format-currency";
-import { Skeleton } from "@/components/skeleton";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 type FinancialIssueType =
   | "invalid_date"
@@ -88,28 +89,22 @@ export function FinancialValidationView({ statementId }: { statementId: string }
   }
 
   if (validationRequest.error) {
-    return (
-      <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-        {validationRequest.error}
-      </p>
-    );
+    return <ErrorText>{validationRequest.error}</ErrorText>;
   }
 
   if (!report || report.valid === null) {
     return (
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      <EmptyText>
         No financial validation has run yet. Either extraction hasn&apos;t run, or
         no transactions were extracted to check.
-      </p>
+      </EmptyText>
     );
   }
 
   return (
     <div className="flex flex-col gap-3">
       {report.valid && report.issues.length === 0 ? (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          All checks passed, no issues found.
-        </p>
+        <EmptyText>All checks passed, no issues found.</EmptyText>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">

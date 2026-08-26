@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { Skeleton } from "@/components/skeleton";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 type TextBlock = {
   text: string;
@@ -67,17 +68,13 @@ export function StatementPagesView({ statementId }: { statementId: string }) {
         </div>
       )}
 
-      {pagesRequest.error && (
-        <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-          {pagesRequest.error}
-        </p>
-      )}
+      {pagesRequest.error && <ErrorText>{pagesRequest.error}</ErrorText>}
 
       {pagesRequest.hasSettled && !pagesRequest.loading && !pagesRequest.error && pages.length === 0 && (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        <EmptyText>
           No page data for this statement. Either it hasn&apos;t finished analysis yet, or it&apos;s
           a CSV (which has no pages).
-        </p>
+        </EmptyText>
       )}
 
       {pages.map((page) => (
@@ -94,9 +91,7 @@ export function StatementPagesView({ statementId }: { statementId: string }) {
 
           <div className="px-4">
             {page.text_blocks.length === 0 ? (
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                No text extracted on this page.
-              </p>
+              <EmptyText>No text extracted on this page.</EmptyText>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">

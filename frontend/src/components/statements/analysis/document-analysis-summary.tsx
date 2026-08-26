@@ -5,9 +5,10 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { useCurrency } from "@/components/currency-context";
+import { useCurrency } from "@/components/statements/analysis/currency-context";
 import { formatCurrency } from "@/lib/format-currency";
-import { Skeleton } from "@/components/skeleton";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 type DocumentSection = {
   type: string;
@@ -107,19 +108,15 @@ export function DocumentAnalysisSummary({ statementId }: { statementId: string }
   }
 
   if (analysisRequest.error) {
-    return (
-      <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-        {analysisRequest.error}
-      </p>
-    );
+    return <ErrorText>{analysisRequest.error}</ErrorText>;
   }
 
   if (!analysis) {
     return (
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      <EmptyText>
         Not yet classified. Analysis may still be running, or this statement was
         skipped (e.g. a scanned PDF with no extracted text).
-      </p>
+      </EmptyText>
     );
   }
 

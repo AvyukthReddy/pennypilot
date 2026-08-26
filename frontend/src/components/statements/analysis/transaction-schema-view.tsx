@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { Skeleton } from "@/components/skeleton";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 type FieldSource = {
   source: string;
@@ -76,19 +77,15 @@ export function TransactionSchemaView({ statementId }: { statementId: string }) 
   }
 
   if (schemaRequest.error) {
-    return (
-      <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-        {schemaRequest.error}
-      </p>
-    );
+    return <ErrorText>{schemaRequest.error}</ErrorText>;
   }
 
   if (!fields) {
     return (
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      <EmptyText>
         No transaction schema discovered yet. Either discovery hasn&apos;t run yet, or
         no transaction regions were detected on this statement.
-      </p>
+      </EmptyText>
     );
   }
 

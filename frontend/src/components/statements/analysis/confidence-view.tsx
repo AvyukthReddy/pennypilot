@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { Skeleton } from "@/components/skeleton";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 type ConfidenceStatusValue = "validated" | "needs_review" | "unreliable";
 
@@ -77,19 +78,15 @@ export function ConfidenceView({ statementId }: { statementId: string }) {
   }
 
   if (confidenceRequest.error) {
-    return (
-      <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-        {confidenceRequest.error}
-      </p>
-    );
+    return <ErrorText>{confidenceRequest.error}</ErrorText>;
   }
 
   if (!confidence || confidence.score === null || confidence.status === null) {
     return (
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      <EmptyText>
         No confidence score yet. Either the pipeline hasn&apos;t run, or this
         statement has no transactions section to score.
-      </p>
+      </EmptyText>
     );
   }
 

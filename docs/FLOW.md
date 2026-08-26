@@ -18,7 +18,7 @@ the gaps between files, so this only earns its keep if it stays accurate.
 
 ## Profile read/write (settings page)
 
-1. `frontend/src/app/settings/page.tsx` renders `components/profile-form.tsx`.
+1. `frontend/src/app/settings/page.tsx` renders `components/settings/profile-form.tsx`.
 2. The form calls `hooks/use-api-request.ts`, which goes through
    `services/app.service.ts` to hit the FastAPI backend at the URL/paths defined in
    `constants/endpoints/settings.endpoints.ts`.
@@ -32,9 +32,9 @@ the gaps between files, so this only earns its keep if it stays accurate.
 
 ## Profile image upload (settings page)
 
-1. `components/profile-form.tsx`'s avatar button opens a hidden file input; on change,
+1. `components/settings/profile-form.tsx`'s avatar button opens a hidden file input; on change,
    files over 5MB are downscaled (max 1024px long edge) and re-encoded as JPEG in
-   `lib/compress-image.ts` (canvas-based, quality stepped down until it fits) before
+   `components/settings/compress-image.ts` (canvas-based, quality stepped down until it fits) before
    upload — files already under 5MB are sent as-is. The result POSTs as `FormData` to
    `settingsEndpoints.profileImage()` via `use-api-request.ts` (which already skips the
    JSON `Content-Type` header for `FormData` bodies, so the browser sets the multipart
@@ -50,8 +50,8 @@ the gaps between files, so this only earns its keep if it stays accurate.
 
 ## Statement upload (statements page)
 
-1. `frontend/src/app/statements/page.tsx` renders `components/statements-list.tsx`,
-   reachable via the "Statements" link in `components/navbar.tsx`.
+1. `frontend/src/app/statements/page.tsx` renders `components/statements/statements-list.tsx`,
+   reachable via the "Statements" link in `components/shared/navbar.tsx`.
 2. On mount, the component GETs `settingsEndpoints`-style
    `constants/endpoints/statements.endpoints.ts` → `/api/statements` through
    `hooks/use-api-request.ts` to list the signed-in user's statements.
@@ -76,7 +76,7 @@ the gaps between files, so this only earns its keep if it stays accurate.
    the caller (same `_get_owned_statement` helper), deletes the Storage object via
    `delete_statement`, then deletes the row.
 8. The statements list polls `GET /api/statements` every ~4s
-   (`components/statements-list.tsx`) while any statement is `uploaded`/`queued`/
+   (`components/statements/statements-list.tsx`) while any statement is `uploaded`/`queued`/
    `processing`, and renders `parse_error` under the status line once parsing
    finishes (or fails/warns) — see "Statement parsing" below.
 
@@ -304,27 +304,27 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
 
 ## Viewing confidence, extracted text blocks, document classification, detected regions, discovered schema, verification, and financial validation (statements page → document analysis)
 
-1. `components/statements-list.tsx` shows a "Text blocks" link (relabeled
+1. `components/statements/statements-list.tsx` shows a "Text blocks" link (relabeled
    "View progress" while `status === "processing"`) per statement row when
    `status === "ingested"` or `"processing"` and `content_type ===
    "application/pdf"`, linking to
    `/statements/analysis?statement_id={id}&filename={filename}`.
 2. `frontend/src/app/statements/analysis/page.tsx` (server component, same auth-gate
    pattern as `/transactions`) renders, top to bottom:
-   `components/pipeline-progress.tsx` (a step list polling `GET
+   `components/statements/analysis/pipeline-progress.tsx` (a step list polling `GET
    /api/statements/{id}/progress` via `statementsEndpoints.progress` every
    `POLL_INTERVAL_MS` (30s, `constants/app.constants.ts`) while `status` is
    `uploaded`/`queued`/`processing`, rendering each of the seven
    `PROCESSING_STAGES` as done/current/pending, with the current stage's
    `processing_detail` as subtext and a red state plus `parse_error` on the
    failed stage when `status === "failed"`; renders nothing at all once
-   `status === "ingested"`), then `components/confidence-view.tsx`,
-   `components/document-analysis-summary.tsx`, `components/
-transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
-   `components/transactions-view.tsx`,
-   `components/transaction-verification-view.tsx`,
-   `components/financial-validation-view.tsx`, then
-   `components/statement-pages-view.tsx`. The confidence section GETs
+   `status === "ingested"`), then `components/statements/analysis/confidence-view.tsx`,
+   `components/statements/analysis/document-analysis-summary.tsx`, `components/
+statements/analysis/transaction-regions-view.tsx`, `components/statements/analysis/transaction-schema-view.tsx`,
+   `components/statements/analysis/transactions-view.tsx`,
+   `components/statements/analysis/transaction-verification-view.tsx`,
+   `components/statements/analysis/financial-validation-view.tsx`, then
+   `components/statements/analysis/statement-pages-view.tsx`. The confidence section GETs
    `GET /api/statements/{id}/confidence` via `statementsEndpoints.confidence`,
    showing a colored status pill (`validated`/`needs_review`/`unreliable`)
    plus the score as a percentage, a warnings list, and a five-component
@@ -346,7 +346,7 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    transactions table GETs `GET /api/transactions?statement_id={id}` via
    `transactionsEndpoints.list` (`backend/app/api/transactions.py` — the
    same endpoint the standalone `/transactions` page and
-   `components/transactions-list.tsx` use, filtered by statement instead of
+   `components/transactions/transactions-list.tsx` use, filtered by statement instead of
    showing the caller's full history), showing every persisted
    `TransactionRow` for this statement (date/description/amount, up to 200
    at once, with a "showing N of total" note if there are more) — or an
@@ -403,19 +403,20 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    are folded into `StatementRead` (used by the statements list) — each can be
    much larger than everything else in that response, except
    `processing_stage`/`processing_detail` themselves, which *are* added to
-   `StatementRead` too (cheap scalars), even though `statements-list.tsx`
+   `StatementRead` too (cheap scalars), even though `components/statements/statements-list.tsx`
    only reads `status` off it today; the fields are there for a future list-
    level progress indicator without a schema change.
 4. Each page in the text-blocks viewer renders as a collapsible `<details>` (first
    page open, rest collapsed) with a table of `text_blocks` —
    `x`/`y`/`width`/`height`/`text`.
-5. `components/currency-context.tsx`'s `CurrencyProvider` wraps the whole
+5. `components/statements/analysis/currency-context.tsx`'s `CurrencyProvider` wraps the whole
    page body and GETs `GET /api/statements/{id}/currency` via
    `statementsEndpoints.currency` once on mount, sharing the result through
    React context so `document-analysis-summary.tsx`, `transactions-view.tsx`,
-   and `financial-validation-view.tsx` all format their amounts with the
+   and `financial-validation-view.tsx` (all in `components/statements/analysis/`) all
+   format their amounts with the
    same value via `lib/format-currency.ts` (a symbol for common codes,
-   `"<code> <amount>"` for the rest). `components/currency-editor.tsx`, next
+   `"<code> <amount>"` for the rest). `components/statements/analysis/currency-editor.tsx`, next
    to the "View" button, renders that value plus its `source`
    (`override`/`detected`/`default`) as a dropdown sourced from
    `format-currency.ts`'s `SUPPORTED_CURRENCIES`; choosing one PATCHes the

@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { Skeleton } from "@/components/skeleton";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 type TransactionRegion = {
   page: number;
@@ -46,19 +47,15 @@ export function TransactionRegionsView({ statementId }: { statementId: string })
   }
 
   if (regionsRequest.error) {
-    return (
-      <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-        {regionsRequest.error}
-      </p>
-    );
+    return <ErrorText>{regionsRequest.error}</ErrorText>;
   }
 
   if (regions.length === 0) {
     return (
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      <EmptyText>
         No transaction regions detected. Either detection hasn&apos;t run yet, or no
         transaction section was found on this statement.
-      </p>
+      </EmptyText>
     );
   }
 

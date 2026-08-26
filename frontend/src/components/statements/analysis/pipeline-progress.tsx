@@ -5,7 +5,9 @@ import { useEffect, useState } from "react";
 import { APP_METHOD, POLL_INTERVAL_MS } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { Skeleton } from "@/components/skeleton";
+import { isNonTerminalStatus } from "@/components/statements/statement-status";
+import { ErrorText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 type StatementProgressResponse = {
   statement_id: string;
@@ -26,8 +28,6 @@ const STAGES: { id: string; label: string }[] = [
   { id: "validating", label: "Validating and reconciling" },
   { id: "scoring_confidence", label: "Scoring confidence" },
 ];
-
-const NON_TERMINAL_STATUSES = new Set(["uploaded", "queued", "processing"]);
 
 function CheckIcon() {
   return (
@@ -112,7 +112,7 @@ export function PipelineProgress({ statementId }: { statementId: string }) {
   }, [statementId]);
 
   useEffect(() => {
-    if (!progress || !NON_TERMINAL_STATUSES.has(progress.status)) return;
+    if (!progress || !isNonTerminalStatus(progress.status)) return;
 
     const interval = setInterval(() => {
       progressRequest
@@ -143,11 +143,7 @@ export function PipelineProgress({ statementId }: { statementId: string }) {
 
       {!progressRequest.hasSettled && <ProgressSkeleton />}
 
-      {progressRequest.error && (
-        <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-          {progressRequest.error}
-        </p>
-      )}
+      {progressRequest.error && <ErrorText>{progressRequest.error}</ErrorText>}
 
       {progressRequest.hasSettled && !progressRequest.error && progress && (
         <PipelineSteps progress={progress} />

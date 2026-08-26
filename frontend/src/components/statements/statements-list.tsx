@@ -6,7 +6,10 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { APP_METHOD, POLL_INTERVAL_MS } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { Skeleton } from "@/components/skeleton";
+import { isNonTerminalStatus } from "@/components/statements/statement-status";
+import { useSignedUrlView } from "@/components/statements/use-signed-url-view";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 const SKELETON_ROW_COUNT = 3;
 
@@ -22,8 +25,6 @@ type Statement = {
   parse_error: string | null;
   created_at: string;
 };
-
-const NON_TERMINAL_STATUSES = new Set(["uploaded", "queued", "processing"]);
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -78,11 +79,10 @@ export function StatementsList() {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [viewingId, setViewingId] = useState<string | null>(null);
   const listRequest = useApiRequest<Statement[]>();
   const uploadRequest = useApiRequest<Statement>();
   const deleteRequest = useApiRequest<{ id: string }>();
-  const viewRequest = useApiRequest<{ url: string }>();
+  const { viewingId, view: handleView, error: viewError } = useSignedUrlView();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -94,9 +94,7 @@ export function StatementsList() {
   }, []);
 
   useEffect(() => {
-    const hasPending = statements.some((s) =>
-      NON_TERMINAL_STATUSES.has(s.status),
-    );
+    const hasPending = statements.some((s) => isNonTerminalStatus(s.status));
     if (!hasPending) return;
 
     const interval = setInterval(() => {
@@ -133,28 +131,6 @@ export function StatementsList() {
       formData,
     );
     if (data) setStatements((prev) => [data, ...prev]);
-  }
-
-  async function handleView(id: string) {
-    setViewingId(id);
-    // Open the tab synchronously on click so browsers don't treat the later
-    // redirect (after the signed-URL request resolves) as a blocked popup.
-    // Can't pass noopener/noreferrer here, those make window.open() return
-    // null, which would leave us with no handle to redirect later.
-    const viewerTab = window.open("", "_blank");
-
-    const data = await viewRequest.run(
-      statementsEndpoints.view(id),
-      APP_METHOD.GET,
-    );
-    setViewingId(null);
-
-    if (data?.url && viewerTab) {
-      viewerTab.opener = null;
-      viewerTab.location.href = data.url;
-    } else {
-      viewerTab?.close();
-    }
   }
 
   async function handleDelete(id: string) {
@@ -194,12 +170,7 @@ export function StatementsList() {
       />
 
       {(uploadError || uploadRequest.error) && (
-        <p
-          className="text-sm text-red-600 dark:text-red-400"
-          aria-live="polite"
-        >
-          {uploadError || uploadRequest.error}
-        </p>
+        <ErrorText>{uploadError || uploadRequest.error}</ErrorText>
       )}
 
       {!listRequest.hasSettled && (
@@ -210,23 +181,12 @@ export function StatementsList() {
         </ul>
       )}
 
-      {listRequest.error && (
-        <p
-          className="text-sm text-red-600 dark:text-red-400"
-          aria-live="polite"
-        >
-          {listRequest.error}
-        </p>
-      )}
+      {listRequest.error && <ErrorText>{listRequest.error}</ErrorText>}
 
       {listRequest.hasSettled &&
         !listRequest.loading &&
         !listRequest.error &&
-        statements.length === 0 && (
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            No statements uploaded yet.
-          </p>
-        )}
+        statements.length === 0 && <EmptyText>No statements uploaded yet.</EmptyText>}
 
       {statements.length > 0 && (
         <ul className="flex flex-col divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -292,23 +252,9 @@ export function StatementsList() {
         </ul>
       )}
 
-      {viewRequest.error && (
-        <p
-          className="text-sm text-red-600 dark:text-red-400"
-          aria-live="polite"
-        >
-          {viewRequest.error}
-        </p>
-      )}
+      {viewError && <ErrorText>{viewError}</ErrorText>}
 
-      {deleteRequest.error && (
-        <p
-          className="text-sm text-red-600 dark:text-red-400"
-          aria-live="polite"
-        >
-          {deleteRequest.error}
-        </p>
-      )}
+      {deleteRequest.error && <ErrorText>{deleteRequest.error}</ErrorText>}
     </div>
   );
 }
