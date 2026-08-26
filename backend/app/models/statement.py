@@ -25,6 +25,12 @@ class Statement(Base):
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parser_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     needs_ocr: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Which pipeline phase is currently running, only meaningful while
+    # status == "processing"; left at its last value on success/failure so a
+    # failed run still shows where it died. See worker/worker/tasks.py's
+    # PROCESSING_STAGES for the fixed, ordered set of values.
+    processing_stage: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    processing_detail: Mapped[str | None] = mapped_column(String(100), nullable=True)
     pages: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     document_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     transaction_regions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

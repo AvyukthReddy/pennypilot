@@ -288,16 +288,38 @@ celery_client.py`) publishes a `worker.parse_statement` task (by name only — t
     `Statement.confidence` (`JSONB`, migration `b8c9d0e1f2a3`) in the same
     `session.commit()`. See `docs/DECISIONS.md`'s 2026-08-24 "Phase 10"
     entry.
+15. Throughout steps 7-14, `worker/worker/tasks.py`'s `_set_stage(session,
+    stmt, stage, detail=None)` commits `Statement.processing_stage`/
+    `processing_detail` (`String` columns, migration `cf872bc680da`) as the
+    first line inside each phase's existing guard, before its try/except,
+    so the value is visible mid-run rather than only after the single final
+    commit. Seven stages (`ingesting`/`understanding`/`detecting_regions`/
+    `discovering_schema`/`extracting`/`validating`/`scoring_confidence`)
+    match the real control flow; `extracting` additionally sets
+    `processing_detail` to `"Region N of M"` per iteration of the
+    per-region loop. A guard that never passes simply never commits its
+    stage, so a later guard passing is what a client polling mid-run sees
+    next. See `docs/DECISIONS.md`'s 2026-08-25 "Live pipeline progress"
+    entry.
 
 ## Viewing confidence, extracted text blocks, document classification, detected regions, discovered schema, verification, and financial validation (statements page → document analysis)
 
-1. `components/statements-list.tsx` shows a "Text blocks" link per statement row when
-   `status === "ingested"` and `content_type === "application/pdf"`, linking to
+1. `components/statements-list.tsx` shows a "Text blocks" link (relabeled
+   "View progress" while `status === "processing"`) per statement row when
+   `status === "ingested"` or `"processing"` and `content_type ===
+   "application/pdf"`, linking to
    `/statements/analysis?statement_id={id}&filename={filename}`.
 2. `frontend/src/app/statements/analysis/page.tsx` (server component, same auth-gate
    pattern as `/transactions`) renders, top to bottom:
-   `components/confidence-view.tsx` (first, the headline verdict, above
-   everything else), `components/document-analysis-summary.tsx`, `components/
+   `components/pipeline-progress.tsx` (a step list polling `GET
+   /api/statements/{id}/progress` via `statementsEndpoints.progress` every
+   `POLL_INTERVAL_MS` (30s, `constants/app.constants.ts`) while `status` is
+   `uploaded`/`queued`/`processing`, rendering each of the seven
+   `PROCESSING_STAGES` as done/current/pending, with the current stage's
+   `processing_detail` as subtext and a red state plus `parse_error` on the
+   failed stage when `status === "failed"`; renders nothing at all once
+   `status === "ingested"`), then `components/confidence-view.tsx`,
+   `components/document-analysis-summary.tsx`, `components/
 transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    `components/transactions-view.tsx`,
    `components/transaction-verification-view.tsx`,
@@ -373,10 +395,17 @@ transaction-regions-view.tsx`, `components/transaction-schema-view.tsx`,
    from `Statement.confidence` (unwrapping `{"score": ..., "status": ...,
    "warnings": [...], "breakdown": {...}}`, `score`/`status`/`breakdown` are
    `null` and `warnings` is `[]` when confidence hasn't been computed),
-   validated against `StatementConfidenceRead`/`ConfidenceBreakdownRead`
+   validated against `StatementConfidenceRead`/`ConfidenceBreakdownRead`;
+   `/progress` returns `{ statement_id, status, processing_stage,
+   processing_detail, parse_error }` straight off the row (no JSONB
+   unwrapping needed), validated against `StatementProgressRead`
    (all in `backend/app/schemas/statement.py`). None of these
    are folded into `StatementRead` (used by the statements list) — each can be
-   much larger than everything else in that response.
+   much larger than everything else in that response, except
+   `processing_stage`/`processing_detail` themselves, which *are* added to
+   `StatementRead` too (cheap scalars), even though `statements-list.tsx`
+   only reads `status` off it today; the fields are there for a future list-
+   level progress indicator without a schema change.
 4. Each page in the text-blocks viewer renders as a collapsible `<details>` (first
    page open, rest collapsed) with a table of `text_blocks` —
    `x`/`y`/`width`/`height`/`text`.

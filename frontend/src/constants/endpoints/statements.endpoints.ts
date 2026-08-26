@@ -5,6 +5,7 @@ export const statementsEndpoints = {
   upload: () => getApiUrl("/api/statements"),
   view: (id: string) => getApiUrl(`/api/statements/${id}/view`),
   pages: (id: string) => getApiUrl(`/api/statements/${id}/pages`),
+  progress: (id: string) => getApiUrl(`/api/statements/${id}/progress`),
   analysis: (id: string) => getApiUrl(`/api/statements/${id}/analysis`),
   transactionRegions: (id: string) => getApiUrl(`/api/statements/${id}/transaction-regions`),
   transactionSchema: (id: string) => getApiUrl(`/api/statements/${id}/transaction-schema`),

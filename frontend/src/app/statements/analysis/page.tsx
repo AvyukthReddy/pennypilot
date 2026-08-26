@@ -7,6 +7,7 @@ import { CurrencyProvider } from "@/components/currency-context";
 import { DocumentAnalysisSummary } from "@/components/document-analysis-summary";
 import { FinancialValidationView } from "@/components/financial-validation-view";
 import { Navbar } from "@/components/navbar";
+import { PipelineProgress } from "@/components/pipeline-progress";
 import { StatementPagesView } from "@/components/statement-pages-view";
 import { StatementViewButton } from "@/components/statement-view-button";
 import { TransactionRegionsView } from "@/components/transaction-regions-view";
@@ -59,6 +60,8 @@ export default async function StatementAnalysisPage({
               <StatementViewButton statementId={statementId} />
             </div>
           </div>
+
+          <PipelineProgress statementId={statementId} />
 
           <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
             <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">

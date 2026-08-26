@@ -3,6 +3,7 @@ import uuid
 from dataclasses import asdict
 
 import httpx
+from sqlalchemy.orm import Session
 
 from worker.celery_app import app
 from worker.confidence import compute_confidence
@@ -30,6 +31,29 @@ logger = logging.getLogger(__name__)
 # ones processed by the current one (e.g. to decide what needs reprocessing
 # once a real parser exists).
 INGESTION_VERSION = "2"
+
+# Fixed, ordered set of pipeline phases surfaced to the frontend as a
+# GitHub-Actions-style step list. Each stage's _set_stage(...) call sits at
+# the very top of that phase's existing guard, before its try/except, so a
+# stage reads as "reached" even if the AI call inside it goes on to fail. A
+# guard that evaluates false simply never calls _set_stage for that phase,
+# so the next phase whose guard passes is the one the frontend sees next,
+# no separate "skipped" bookkeeping needed.
+PROCESSING_STAGES = (
+    "ingesting",
+    "understanding",
+    "detecting_regions",
+    "discovering_schema",
+    "extracting",
+    "validating",
+    "scoring_confidence",
+)
+
+
+def _set_stage(session: Session, stmt: StatementRow, stage: str, detail: str | None = None) -> None:
+    stmt.processing_stage = stage
+    stmt.processing_detail = detail
+    session.commit()
 
 
 @app.task(name="worker.ping")
@@ -65,7 +89,9 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
     (extraction completeness, verification cleanliness, financial-
     validation issues, balance reconciliation, structural consistency) into
     one deterministic score before inserting the final rows into the
-    transactions table."""
+    transactions table. Commits stmt.processing_stage/processing_detail as
+    each phase begins (see PROCESSING_STAGES) so a client polling the API
+    mid-run can show live progress."""
     session = SessionLocal()
     try:
         stmt = session.get(StatementRow, uuid.UUID(statement_id))
@@ -74,6 +100,8 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
 
         stmt.status = "processing"
         stmt.parse_error = None
+        stmt.processing_stage = "ingesting"
+        stmt.processing_detail = None
         session.commit()
 
         try:
@@ -126,6 +154,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         # statement, only leave it unclassified.
         document_analysis: DocumentAnalysis | None = None
         if stmt.content_type == "application/pdf" and not needs_ocr and pages:
+            _set_stage(session, stmt, "understanding")
             try:
                 document_analysis = DocumentUnderstandingService().analyze(document)
             except Exception:
@@ -141,6 +170,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         if document_analysis and any(
             section.type == "transactions" for section in document_analysis.sections
         ):
+            _set_stage(session, stmt, "detecting_regions")
             try:
                 transaction_regions = TransactionRegionDetectionService().detect(
                     document, document_analysis
@@ -156,6 +186,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         # to map if Phase 4 found no regions to narrow to.
         transaction_schema: TransactionSchemaDiscovery | None = None
         if transaction_regions and transaction_regions.transaction_regions:
+            _set_stage(session, stmt, "discovering_schema")
             try:
                 transaction_schema = TransactionSchemaDiscoveryService().discover(
                     document, transaction_regions
@@ -176,7 +207,12 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         verification_by_page: dict[int, TransactionVerification] = {}
         verification_reports: list[TransactionVerification] = []
         if transaction_schema and transaction_regions:
-            for region in transaction_regions.transaction_regions:
+            regions = transaction_regions.transaction_regions
+            _set_stage(session, stmt, "extracting")
+            for index, region in enumerate(regions, start=1):
+                _set_stage(
+                    session, stmt, "extracting", detail=f"Region {index} of {len(regions)}"
+                )
                 try:
                     extraction = TransactionExtractionService().extract(
                         document, region, transaction_schema.transaction_fields
@@ -258,6 +294,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         # Purely diagnostic: never blocks persistence, never touches status.
         financial_validation = None
         if extracted_rows:
+            _set_stage(session, stmt, "validating")
             try:
                 financial_validation = validate_transactions(document_analysis, extracted_rows)
             except Exception:
@@ -305,6 +342,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         if document_analysis and any(
             section.type == "transactions" for section in document_analysis.sections
         ):
+            _set_stage(session, stmt, "scoring_confidence")
             try:
                 confidence = compute_confidence(
                     document_analysis,

@@ -16,6 +16,7 @@ from app.schemas.statement import (
     StatementCurrencyUpdate,
     StatementFinancialValidationRead,
     StatementPagesRead,
+    StatementProgressRead,
     StatementRead,
     StatementTransactionRegionsRead,
     StatementTransactionSchemaRead,
@@ -147,6 +148,22 @@ def get_statement_pages(
 ) -> dict:
     statement = _get_owned_statement(statement_id, user, db)
     return {"statement_id": statement.id, "pages": statement.pages or []}
+
+
+@router.get("/api/statements/{statement_id}/progress", response_model=StatementProgressRead)
+def get_statement_progress(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    return {
+        "statement_id": statement.id,
+        "status": statement.status,
+        "processing_stage": statement.processing_stage,
+        "processing_detail": statement.processing_detail,
+        "parse_error": statement.parse_error,
+    }
 
 
 @router.get("/api/statements/{statement_id}/analysis", response_model=StatementAnalysisRead)

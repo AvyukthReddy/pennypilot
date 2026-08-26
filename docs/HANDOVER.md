@@ -133,7 +133,13 @@ request-flow maps).
   (and possibly corrected/recovered) row is inserted into the `transactions` table
   (`worker/worker/models.py`'s `TransactionRow`). Earlier parsing-pipeline
   attempts were deleted entirely (never committed, so no history to
-  preserve). See [DECISIONS.md](DECISIONS.md)'s "Phase 10: confidence",
+  preserve). Throughout, `Statement.processing_stage`/`processing_detail`
+  are committed progressively (one of `ingesting`/`understanding`/
+  `detecting_regions`/`discovering_schema`/`extracting`/`validating`/
+  `scoring_confidence`, set right as each phase begins) so a client polling
+  mid-run can show real-time progress, not just a coarse `status`. See
+  [DECISIONS.md](DECISIONS.md)'s "Live pipeline progress", "Phase 10:
+  confidence",
   "Phase 9: recovery", "Phase
   8: deterministic financial validation", "Phase 7: transaction
   verification", "Phase
@@ -145,14 +151,19 @@ request-flow maps).
   discovered schema, verification report, and financial validation**:
   `GET /api/statements/{id}/pages`, `/analysis`, `/transaction-regions`,
   `/transaction-schema`, `/transaction-verification`,
-  `/financial-validation`, and `/confidence` (`backend/app/api/statements.py`) return a
+  `/financial-validation`, `/confidence`, and `/progress`
+  (`backend/app/api/statements.py`) return a
   statement's persisted `pages`/`document_analysis`/`transaction_regions`/
   `transaction_schema`/`transaction_verification`/`financial_validation`/
-  `confidence`
+  `confidence`/`processing_stage`+`processing_detail`
   (same ownership check as `/view`). Frontend: a
   "Text blocks" link per statement row (`components/statements-list.tsx`,
-  shown for `status === "ingested"` PDFs) opens `/statements/analysis`, which
-  renders, top to bottom: `components/confidence-view.tsx` (first, a
+  shown for `status === "ingested"` or `"processing"` PDFs, relabeled
+  "View progress" while processing) opens `/statements/analysis`, which
+  renders, top to bottom: `components/pipeline-progress.tsx` (a
+  GitHub-Actions-style step list polling `/progress` every 30s while
+  non-terminal, hidden once `status === "ingested"`),
+  `components/confidence-view.tsx` (a
   colored status pill, score percentage, warnings, and a five-component
   breakdown, or an explanatory empty state), `components/document-analysis-summary.tsx`
   (document type/institution/account/currency/period/beginning and ending
@@ -210,29 +221,34 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: editable
-  statement currency. New `Statement.currency` column (`String(3)`,
-  nullable, migration `c9d0e1f2a3b4`) is a user override, separate from
-  `document_analysis.currency` (AI-detected). `GET/PATCH
-  /api/statements/{id}/currency` resolves the effective value as override,
-  then detected, then a `"USD"` default, and returns which of the three
-  (`source`) it picked; `PATCH` with `{"currency": null}` clears the
-  override back to auto-detect. Every amount on `/statements/analysis`
-  (transaction rows, both balance summaries) now renders through
-  `frontend/src/lib/format-currency.ts`, which maps common codes to a
-  symbol and falls back to `"<code> <amount>"` for the rest, so nothing
-  shows a bare number. `components/currency-context.tsx`'s
-  `CurrencyProvider` fetches the effective currency once per page load and
-  shares it via context so every section stays in sync after an edit,
-  instead of each re-fetching independently. `components/
-  currency-editor.tsx` is a dropdown (not free text, to keep the value a
-  real currency code) sourced from `format-currency.ts`'s
-  `SUPPORTED_CURRENCIES` list, with a "Reset to auto-detected" action when
-  overridden. The analysis page also gained two section titles it was
-  missing ("Document analysis", "Raw data"), matching every other section.
-  See [DECISIONS.md](DECISIONS.md)'s 2026-08-25 "Statement currency"
-  entry. Worker unaffected. Backend: `.venv/Scripts/python.exe -m pytest
-  -q` passes (69 tests), migration applied, ruff clean. Frontend: `tsc
+- Nothing currently in flight. Last completed unit of work: live pipeline
+  progress on `/statements/analysis`. New `Statement.processing_stage`/
+  `processing_detail` columns (both nullable, migration `cf872bc680da`)
+  are committed progressively as `worker/worker/tasks.py`'s
+  `parse_statement` runs, via a `_set_stage(session, stmt, stage,
+  detail=None)` helper called at the top of each phase's existing guard
+  (before its try/except), instead of everything landing in the one big
+  commit at the end like before. Seven stages (`ingesting`,
+  `understanding`, `detecting_regions`, `discovering_schema`,
+  `extracting`, `validating`, `scoring_confidence`) match the real control
+  flow: `extracting` covers the whole per-region extract-then-verify loop
+  (with `processing_detail` as `"Region N of M"` per iteration),
+  `validating` covers both financial validation and any recovery attempt.
+  A guard that never passes just never commits its stage, so the stepper
+  correctly "jumps forward" over stages that didn't run, an accepted v1
+  simplification since guard checks have zero I/O between them (see
+  [DECISIONS.md](DECISIONS.md)'s 2026-08-25 "Live pipeline progress"
+  entry). New `GET /api/statements/{id}/progress` returns
+  `{statement_id, status, processing_stage, processing_detail,
+  parse_error}` cheaply. New `components/pipeline-progress.tsx` polls it
+  every 30s (shared `POLL_INTERVAL_MS`, now in `constants/app.constants.ts`
+  instead of duplicated locally) while `status` is non-terminal, rendering
+  a GitHub-Actions-style step list (done/current/pending/error), hidden
+  entirely once `status === "ingested"`. `statements-list.tsx`'s "Text
+  blocks" link (relabeled "View progress" while processing) now also shows
+  during `status === "processing"`, not only `"ingested"`, so users can
+  actually reach the page mid-run. Worker: 92 tests pass, ruff clean.
+  Backend: 75 tests pass, migration applied, ruff clean. Frontend: `tsc
   --noEmit` and `eslint src/` both clean.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not

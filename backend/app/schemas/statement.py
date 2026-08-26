@@ -15,6 +15,8 @@ class StatementRead(BaseModel):
     parse_error: str | None = None
     page_count: int | None = None
     needs_ocr: bool | None = None
+    processing_stage: str | None = None
+    processing_detail: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -185,3 +187,11 @@ class StatementCurrencyUpdate(BaseModel):
     @classmethod
     def _uppercase(cls, value: str | None) -> str | None:
         return value.upper() if value else None
+
+
+class StatementProgressRead(BaseModel):
+    statement_id: uuid.UUID
+    status: str
+    processing_stage: str | None
+    processing_detail: str | None
+    parse_error: str | None
