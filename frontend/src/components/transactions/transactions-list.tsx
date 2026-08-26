@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { APP_METHOD } from "@/constants/app.constants";
 import {
@@ -9,12 +9,14 @@ import {
   type TransactionSortBy,
   type TransactionType,
 } from "@/constants/endpoints/transactions.endpoints";
+import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
 import { formatSignedCurrency } from "@/lib/format-currency";
 import { FORM_INPUT_CLASS } from "@/constants/form.constants";
+import { DOCUMENT_TYPE_LABELS, DOCUMENT_TYPE_OPTIONS } from "@/constants/document-analysis.constants";
 import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
 import { TransactionRowSkeleton } from "@/components/shared/skeleton";
-import { DocumentNameFilter } from "@/components/transactions/document-name-filter";
+import { MultiSelectFilter } from "@/components/shared/multi-select-filter";
 
 const PAGE_SIZE = 25;
 const SKELETON_ROW_COUNT = 5;
@@ -45,6 +47,13 @@ type TransactionListResponse = {
   total_pages: number;
 };
 
+type StatementListItem = {
+  filename: string;
+  institution: string | null;
+  account_type_tags: string[];
+  document_type: string | null;
+};
+
 export function TransactionsList({
   initialStatementId,
   initialFilename,
@@ -54,6 +63,9 @@ export function TransactionsList({
 }) {
   const [statementId, setStatementId] = useState(initialStatementId);
   const [documentNames, setDocumentNames] = useState<string[]>([]);
+  const [documentTypes, setDocumentTypes] = useState<string[]>([]);
+  const [institutions, setInstitutions] = useState<string[]>([]);
+  const [accountTypeTags, setAccountTypeTags] = useState<string[]>([]);
   const [type, setType] = useState<TransactionType | "">("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -66,8 +78,50 @@ export function TransactionsList({
   const [totalPages, setTotalPages] = useState(0);
   const listRequest = useApiRequest<TransactionListResponse>();
 
+  const [statements, setStatements] = useState<StatementListItem[]>([]);
+  const statementsRequest = useApiRequest<StatementListItem[]>();
+
+  useEffect(() => {
+    statementsRequest.run(statementsEndpoints.list(), APP_METHOD.GET).then((data) => {
+      if (data) setStatements(data);
+    });
+    // statementsRequest.run is stable (useCallback with no deps), safe to omit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filenameOptions = useMemo(
+    () => Array.from(new Set(statements.map((s) => s.filename))).sort((a, b) => a.localeCompare(b)),
+    [statements],
+  );
+  const institutionOptions = useMemo(
+    () =>
+      Array.from(new Set(statements.map((s) => s.institution).filter((v): v is string => !!v))).sort(
+        (a, b) => a.localeCompare(b),
+      ),
+    [statements],
+  );
+  const tagOptions = useMemo(
+    () => Array.from(new Set(statements.flatMap((s) => s.account_type_tags))).sort((a, b) => a.localeCompare(b)),
+    [statements],
+  );
+
   function handleDocumentNamesChange(filenames: string[]) {
     setDocumentNames(filenames);
+    setPage(1);
+  }
+
+  function handleDocumentTypesChange(values: string[]) {
+    setDocumentTypes(values);
+    setPage(1);
+  }
+
+  function handleInstitutionsChange(values: string[]) {
+    setInstitutions(values);
+    setPage(1);
+  }
+
+  function handleAccountTypeTagsChange(values: string[]) {
+    setAccountTypeTags(values);
     setPage(1);
   }
 
@@ -79,6 +133,9 @@ export function TransactionsList({
         transactionsEndpoints.list({
           statementId,
           documentNames: documentNames.length ? documentNames : undefined,
+          documentTypes: documentTypes.length ? documentTypes : undefined,
+          institutions: institutions.length ? institutions : undefined,
+          accountTypeTags: accountTypeTags.length ? accountTypeTags : undefined,
           type: type || undefined,
           startDate: startDate || undefined,
           endDate: endDate || undefined,
@@ -97,7 +154,19 @@ export function TransactionsList({
       });
     // listRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statementId, documentNames, type, startDate, endDate, sortBy, sortOrder, page]);
+  }, [
+    statementId,
+    documentNames,
+    documentTypes,
+    institutions,
+    accountTypeTags,
+    type,
+    startDate,
+    endDate,
+    sortBy,
+    sortOrder,
+    page,
+  ]);
 
   function clearStatementFilter() {
     setStatementId(undefined);
@@ -109,10 +178,20 @@ export function TransactionsList({
     setPage(1);
   }
 
-  const hasFilters = documentNames.length > 0 || type || startDate || endDate;
+  const hasFilters =
+    documentNames.length > 0 ||
+    documentTypes.length > 0 ||
+    institutions.length > 0 ||
+    accountTypeTags.length > 0 ||
+    type ||
+    startDate ||
+    endDate;
 
   function clearAllFilters() {
     setDocumentNames([]);
+    setDocumentTypes([]);
+    setInstitutions([]);
+    setAccountTypeTags([]);
     setType("");
     setStartDate("");
     setEndDate("");
@@ -138,7 +217,41 @@ export function TransactionsList({
       )}
 
       <div className="flex flex-wrap items-end gap-3">
-        <DocumentNameFilter value={documentNames} onChange={handleDocumentNamesChange} />
+        <MultiSelectFilter
+          label="Document"
+          value={documentNames}
+          onChange={handleDocumentNamesChange}
+          options={filenameOptions}
+          placeholder="Select documents…"
+          emptyMessage="No statements yet"
+        />
+
+        <MultiSelectFilter
+          label="Institution"
+          value={institutions}
+          onChange={handleInstitutionsChange}
+          options={institutionOptions}
+          placeholder="Select institutions…"
+          emptyMessage="No institutions yet"
+        />
+
+        <MultiSelectFilter
+          label="Account type"
+          value={accountTypeTags}
+          onChange={handleAccountTypeTagsChange}
+          options={tagOptions}
+          placeholder="Select account types…"
+          emptyMessage="No tags yet"
+        />
+
+        <MultiSelectFilter
+          label="Document type"
+          value={documentTypes}
+          onChange={handleDocumentTypesChange}
+          options={DOCUMENT_TYPE_OPTIONS}
+          optionLabel={(v) => DOCUMENT_TYPE_LABELS[v as keyof typeof DOCUMENT_TYPE_LABELS] ?? v}
+          placeholder="Select document types…"
+        />
 
         <label className="flex flex-col gap-1 text-xs text-zinc-500 dark:text-zinc-400">
           Type

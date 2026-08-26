@@ -14,5 +14,7 @@ export const statementsEndpoints = {
   financialValidation: (id: string) => getApiUrl(`/api/statements/${id}/financial-validation`),
   confidence: (id: string) => getApiUrl(`/api/statements/${id}/confidence`),
   currency: (id: string) => getApiUrl(`/api/statements/${id}/currency`),
+  institution: (id: string) => getApiUrl(`/api/statements/${id}/institution`),
+  accountTypeTags: (id: string) => getApiUrl(`/api/statements/${id}/account-type-tags`),
   delete: (id: string) => getApiUrl(`/api/statements/${id}`),
 };

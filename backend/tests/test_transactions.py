@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.core.db import get_db
 from app.main import app
+from app.models.statement import Statement
 from app.models.transaction import Transaction
 
 client = TestClient(app)
@@ -18,17 +19,25 @@ class FakeSession:
     as test_statements.py's FakeSession: this exercises the endpoint's
     response assembly, not the real WHERE-clause filtering (which is
     standard SQLAlchemy `.where()` usage, not custom logic worth re-proving
-    here)."""
+    here). `statements` backs the document_type/institution/account_type_tag
+    filters' Python-side resolution pass, which queries Statement directly."""
 
-    def __init__(self, transactions: list[Transaction], total: int | None = None) -> None:
+    def __init__(
+        self,
+        transactions: list[Transaction],
+        total: int | None = None,
+        statements: list[Statement] | None = None,
+    ) -> None:
         self.transactions = transactions
         self.total = total if total is not None else len(transactions)
+        self.statements = statements or []
 
     def scalar(self, _stmt):
         return self.total
 
-    def scalars(self, _stmt):
-        return self.transactions
+    def scalars(self, stmt):
+        entity = stmt.column_descriptions[0]["entity"]
+        return self.statements if entity is Statement else self.transactions
 
 
 def _use_fake_db(session: FakeSession) -> None:
@@ -141,6 +150,104 @@ def test_list_transactions_accepts_type_and_date_filters(make_token) -> None:
     response = client.get(
         "/api/transactions?type=debit&start_date=2026-01-01&end_date=2026-01-31"
         "&sort_by=amount&sort_order=asc",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_list_transactions_accepts_document_type_filter(make_token) -> None:
+    _use_fake_db(FakeSession([], statements=[]))
+    token = make_token()
+
+    response = client.get(
+        "/api/transactions?document_type=bank_statement&document_type=unknown",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_list_transactions_accepts_institution_filter(make_token) -> None:
+    _use_fake_db(FakeSession([], statements=[]))
+    token = make_token()
+
+    response = client.get(
+        "/api/transactions?institution=Chase&institution=BoA",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_list_transactions_accepts_account_type_tag_filter(make_token) -> None:
+    _use_fake_db(FakeSession([], statements=[]))
+    token = make_token()
+
+    response = client.get(
+        "/api/transactions?account_type_tag=checking&account_type_tag=savings",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_list_transactions_combines_new_filters_with_existing_ones(make_token) -> None:
+    _use_fake_db(FakeSession([], statements=[]))
+    token = make_token()
+
+    response = client.get(
+        "/api/transactions?document_type=bank_statement&institution=Chase"
+        "&account_type_tag=checking&type=debit&start_date=2026-01-01&end_date=2026-01-31",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_list_transactions_filters_by_resolved_institution_and_tags(make_token) -> None:
+    matching_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="chase.pdf",
+        storage_path="path",
+        content_type="application/pdf",
+        size_bytes=10,
+        document_analysis={
+            "document_type": "bank_statement",
+            "institution": "Chase",
+            "account_type": "checking_and_savings",
+        },
+        institution=None,
+        account_type_tags=None,
+    )
+    other_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="amex.pdf",
+        storage_path="path",
+        content_type="application/pdf",
+        size_bytes=10,
+        document_analysis={
+            "document_type": "credit_card_statement",
+            "institution": "Amex",
+            "account_type": "credit_card",
+        },
+        institution=None,
+        account_type_tags=None,
+    )
+    matching_txn = _make_transaction(statement_id=matching_statement.id)
+    other_txn = _make_transaction(statement_id=other_statement.id)
+    _use_fake_db(
+        FakeSession(
+            [matching_txn, other_txn],
+            statements=[matching_statement, other_statement],
+        )
+    )
+    token = make_token()
+
+    response = client.get(
+        "/api/transactions?institution=Chase&account_type_tag=savings",
         headers={"Authorization": f"Bearer {token}"},
     )
 

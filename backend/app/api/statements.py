@@ -10,17 +10,25 @@ from app.core.db import get_db
 from app.core.security import CurrentUser, get_current_user
 from app.models.statement import Statement
 from app.schemas.statement import (
+    StatementAccountTypeTagsRead,
+    StatementAccountTypeTagsUpdate,
     StatementAnalysisRead,
     StatementConfidenceRead,
     StatementCurrencyRead,
     StatementCurrencyUpdate,
     StatementFinancialValidationRead,
+    StatementInstitutionRead,
+    StatementInstitutionUpdate,
     StatementPagesRead,
     StatementProgressRead,
     StatementRead,
     StatementTransactionRegionsRead,
     StatementTransactionSchemaRead,
     StatementTransactionVerificationRead,
+)
+from app.services.statement_fields import (
+    resolve_account_type_tags,
+    resolve_institution,
 )
 from app.services.storage import delete_statement, get_statement_view_url, upload_statement
 
@@ -54,17 +62,41 @@ def _get_owned_statement(statement_id: uuid.UUID, user: CurrentUser, db: Session
     return statement
 
 
+def _to_statement_read(statement: Statement) -> StatementRead:
+    institution, _, _ = resolve_institution(statement)
+    tags, _, _ = resolve_account_type_tags(statement)
+    document_type = (
+        statement.document_analysis.get("document_type") if statement.document_analysis else None
+    )
+    return StatementRead(
+        id=statement.id,
+        filename=statement.filename,
+        content_type=statement.content_type,
+        size_bytes=statement.size_bytes,
+        status=statement.status,
+        parse_error=statement.parse_error,
+        page_count=statement.page_count,
+        needs_ocr=statement.needs_ocr,
+        processing_stage=statement.processing_stage,
+        processing_detail=statement.processing_detail,
+        document_type=document_type,
+        institution=institution,
+        account_type_tags=tags,
+        created_at=statement.created_at,
+    )
+
+
 @router.get("/api/statements", response_model=list[StatementRead])
 def list_statements(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[Statement]:
+) -> list[StatementRead]:
     stmt = (
         select(Statement)
         .where(Statement.user_id == uuid.UUID(user.id))
         .order_by(Statement.created_at.desc())
     )
-    return list(db.scalars(stmt))
+    return [_to_statement_read(s) for s in db.scalars(stmt)]
 
 
 @router.post("/api/statements", response_model=StatementRead)
@@ -72,7 +104,7 @@ def upload_statement_file(
     file: UploadFile = File(...),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> Statement:
+) -> StatementRead:
     data = file.file.read()
     file_hash = hashlib.sha256(data).hexdigest()
 
@@ -126,7 +158,7 @@ def upload_statement_file(
         db.commit()
         db.refresh(statement)
 
-    return statement
+    return _to_statement_read(statement)
 
 
 @router.get("/api/statements/{statement_id}/view")
@@ -311,6 +343,90 @@ def update_statement_currency(
         "currency": currency,
         "source": source,
         "detected_currency": detected,
+    }
+
+
+@router.get(
+    "/api/statements/{statement_id}/institution",
+    response_model=StatementInstitutionRead,
+)
+def get_statement_institution(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    institution, source, detected = resolve_institution(statement)
+    return {
+        "statement_id": statement.id,
+        "institution": institution,
+        "source": source,
+        "detected_institution": detected,
+    }
+
+
+@router.patch(
+    "/api/statements/{statement_id}/institution",
+    response_model=StatementInstitutionRead,
+)
+def update_statement_institution(
+    statement_id: uuid.UUID,
+    body: StatementInstitutionUpdate,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    statement.institution = body.institution
+    db.commit()
+    db.refresh(statement)
+    institution, source, detected = resolve_institution(statement)
+    return {
+        "statement_id": statement.id,
+        "institution": institution,
+        "source": source,
+        "detected_institution": detected,
+    }
+
+
+@router.get(
+    "/api/statements/{statement_id}/account-type-tags",
+    response_model=StatementAccountTypeTagsRead,
+)
+def get_statement_account_type_tags(
+    statement_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    tags, source, detected = resolve_account_type_tags(statement)
+    return {
+        "statement_id": statement.id,
+        "account_type_tags": tags,
+        "source": source,
+        "detected_account_type_tags": detected,
+    }
+
+
+@router.patch(
+    "/api/statements/{statement_id}/account-type-tags",
+    response_model=StatementAccountTypeTagsRead,
+)
+def update_statement_account_type_tags(
+    statement_id: uuid.UUID,
+    body: StatementAccountTypeTagsUpdate,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    statement = _get_owned_statement(statement_id, user, db)
+    statement.account_type_tags = body.account_type_tags
+    db.commit()
+    db.refresh(statement)
+    tags, source, detected = resolve_account_type_tags(statement)
+    return {
+        "statement_id": statement.id,
+        "account_type_tags": tags,
+        "source": source,
+        "detected_account_type_tags": detected,
     }
 
 

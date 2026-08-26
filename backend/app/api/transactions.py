@@ -12,6 +12,7 @@ from app.core.security import CurrentUser, get_current_user
 from app.models.statement import Statement
 from app.models.transaction import Transaction
 from app.schemas.transaction import TransactionListRead
+from app.services.statement_fields import resolve_account_type_tags, resolve_institution
 
 router = APIRouter()
 
@@ -23,10 +24,52 @@ SORTABLE_COLUMNS = {
 }
 
 
+def _matching_statement_ids(
+    db: Session,
+    user_id: uuid.UUID,
+    document_type: list[str] | None,
+    institution: list[str] | None,
+    account_type_tag: list[str] | None,
+) -> list[uuid.UUID] | None:
+    """Resolves every one of the user's statements' effective document_type/
+    institution/account_type_tags in Python (override resolution isn't
+    expressible as a plain WHERE clause) and returns the ids matching all given
+    filters (OR within one filter's values, AND across the three filter
+    dimensions), or None if none of the three filters were requested."""
+    if not (document_type or institution or account_type_tag):
+        return None
+
+    statements = list(db.scalars(select(Statement).where(Statement.user_id == user_id)))
+    doctype_set = set(document_type) if document_type else None
+    institution_set = set(institution) if institution else None
+    tag_set = set(account_type_tag) if account_type_tag else None
+
+    matching: list[uuid.UUID] = []
+    for s in statements:
+        if doctype_set is not None:
+            doc_type = s.document_analysis.get("document_type") if s.document_analysis else None
+            if doc_type not in doctype_set:
+                continue
+        if institution_set is not None:
+            resolved_institution, _, _ = resolve_institution(s)
+            if resolved_institution not in institution_set:
+                continue
+        if tag_set is not None:
+            resolved_tags, _, _ = resolve_account_type_tags(s)
+            if not (tag_set & set(resolved_tags)):
+                continue
+        matching.append(s.id)
+    return matching
+
+
 @router.get("/api/transactions", response_model=TransactionListRead)
 def list_transactions(
     statement_id: uuid.UUID | None = None,
     document_name: list[str] | None = Query(None),
+    document_type: list[Literal["bank_statement", "credit_card_statement", "unknown"]]
+    | None = Query(None),
+    institution: list[str] | None = Query(None),
+    account_type_tag: list[str] | None = Query(None),
     type: Literal["credit", "debit"] | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
@@ -48,6 +91,12 @@ def list_transactions(
         filters.append(Transaction.transaction_date >= start_date)
     if end_date is not None:
         filters.append(Transaction.transaction_date <= end_date)
+
+    matching_ids = _matching_statement_ids(
+        db, uuid.UUID(user.id), document_type, institution, account_type_tag
+    )
+    if matching_ids is not None:
+        filters.append(Transaction.statement_id.in_(matching_ids))
 
     base = select(Transaction).where(*filters)
     count_base = select(func.count()).select_from(Transaction).where(*filters)

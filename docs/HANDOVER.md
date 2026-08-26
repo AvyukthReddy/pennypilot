@@ -211,18 +211,44 @@ request-flow maps).
   reverted (`docker/docker-compose.yml`, `worker/Dockerfile` back to
   `context: ../worker`); the root `.dockerignore` that went with it was removed too.
 - **Transactions list**: `GET /api/transactions` (`backend/app/api/transactions.py`)
-  supports `document_name` (repeatable query param, exact match against
-  `Statement.filename` via `.in_(...)`, joined only when set)/`type` (`credit`/`debit`,
-  mapped to `amount > 0`/`< 0`)/`start_date`/`end_date` filters, `sort_by`/`sort_order`,
-  and page-based pagination (`page`/`page_size` in, `total_pages` out — replaced the
-  old `limit`/`offset` shape). Frontend: `frontend/src/app/transactions/page.tsx`
-  renders `components/transactions/transactions-list.tsx`, which now has filter inputs
-  — including `components/transactions/document-name-filter.tsx`, a multi-select
-  combobox (type to narrow, click to add as a removable chip) fed by the caller's real
-  statement filenames from `GET /api/statements`, not free text — a type select, from/to
-  date inputs, a sort dropdown + direction toggle, and Previous/Next pagination instead
-  of the old "Load more" button. See [DECISIONS.md](DECISIONS.md)'s 2026-08-26 entry
-  and [FLOW.md](FLOW.md)'s "Transactions list (standalone page)" section.
+  supports `document_name`/`document_type`/`institution`/`account_type_tag` (all
+  repeatable query params, OR-within/AND-across match semantics)/`type` (`credit`/
+  `debit`, mapped to `amount > 0`/`< 0`)/`start_date`/`end_date` filters, `sort_by`/
+  `sort_order`, and page-based pagination (`page`/`page_size` in, `total_pages` out).
+  `document_name` is an exact match against `Statement.filename`; `document_type` reads
+  straight off `document_analysis`; `institution`/`account_type_tag` go through the
+  same override-aware resolvers as the customization feature below (Python-side, via
+  `_matching_statement_ids` in `transactions.py`, since override resolution isn't a
+  plain SQL `WHERE`). Frontend: `frontend/src/app/transactions/page.tsx` renders
+  `components/transactions/transactions-list.tsx`, which fetches `GET /api/statements`
+  once and derives filenames/institutions/tags option lists via `useMemo`, rendering
+  four `components/shared/multi-select-filter.tsx` instances (document, institution,
+  account type, document type — a generalized, options-as-a-prop version of the
+  combobox that used to be document-filename-specific) plus a type select, from/to date
+  inputs, a sort dropdown + direction toggle, and Previous/Next pagination. See
+  [DECISIONS.md](DECISIONS.md)'s 2026-08-26 entries and [FLOW.md](FLOW.md)'s
+  "Transactions list (standalone page)" section.
+- **Customizable institution & account-type tags**: `Statement` gained `institution`
+  (nullable `String(255)` override) and `account_type_tags` (nullable `JSONB` list
+  override — `None` means "use detected", an explicit `[]` means the user cleared
+  every tag and detection must NOT be used as a fallback) columns, migration
+  `07f7b7d96535`. `backend/app/services/statement_fields.py` holds
+  `normalize_account_type_tags` (turns the AI's free-text `account_type`, e.g.
+  `"checking_and_savings"`, into clean lowercase tags, e.g. `["checking", "savings"]`)
+  and `resolve_institution`/`resolve_account_type_tags` (override/detected/default
+  precedence, same shape as `statements.py`'s existing `_resolve_currency` but shared
+  since transactions filtering also needs them). New GET/PATCH
+  `/api/statements/{id}/institution` and `/account-type-tags` endpoints mirror the
+  existing currency ones exactly. `GET /api/statements` (`StatementRead`) now also
+  returns resolved `document_type`/`institution`/`account_type_tags` per statement (via
+  a new `_to_statement_read` helper, since these aren't plain ORM columns) — this is
+  what the transactions filter dropdowns above read their options from. Frontend:
+  `components/statements/analysis/institution-editor.tsx` (free-text input, not a
+  dropdown — institutions aren't a fixed list) and
+  `components/statements/analysis/account-type-tags-editor.tsx` (removable chips + an
+  add-tag input, every add/remove PATCHes immediately) render inside
+  `document-analysis-summary.tsx`, each with "Reset to auto-detected" when overridden.
+  See [DECISIONS.md](DECISIONS.md)'s 2026-08-26 entries.
 - **Postgres RLS**: `users`, `statements`, and `transactions` all have Row Level
   Security enabled with an `auth.uid() = user_id` owner policy (`alembic_version` has
   RLS on with no policy, fully locking it out of the API). This closes a real gap
@@ -234,12 +260,19 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: transactions list
-  filters/sort/pagination (see "Where things stand" above). Not yet manually
-  verified in a browser — the Chrome automation tool was unresponsive when this was
-  built; `tsc --noEmit`, `eslint src/`, `npm run build`, and the full backend pytest
-  suite (77 passed) are all clean, but click through `/transactions` for real before
-  calling this done.
+- Nothing currently in flight. Last completed unit of work: customizable
+  institution/account-type tags plus the three new transactions filters built on top
+  of them (see "Where things stand" above). Not yet manually verified in a browser —
+  the Chrome automation tool was unresponsive for most of this session (it worked
+  briefly, then got stuck again — "Frame with ID 0 is showing error page" on every
+  page, not specific to this app); `tsc --noEmit`, `eslint src/`, `npm run build`, and
+  the full backend pytest suite (110 passed) are all clean, but click through
+  `/statements/analysis` (institution/tag editing) and `/transactions` (the four new
+  filter comboboxes) for real before calling this done.
+- Before that: transactions list filters/sort/pagination (document name, type, date
+  range, sort, page-based pagination replacing "Load more") — see the "Transactions
+  list" bullet above, since that feature was superseded/extended by this session's
+  work rather than staying a separate line item.
 - Before that: a folder-structure
   refactor of `frontend/src/` for clean architecture — no functional/UI changes.
   `components/` was flat (20 files mixing 5 unrelated feature domains); it's now
@@ -341,12 +374,13 @@ request-flow maps).
   all skipped for these too. Also
   not yet scoped (which OCR engine/vision API, whether it produces the same
   `Page`/`text_blocks` shape or something else).
-- Manually verify the new transactions filters/sort/pagination in a real browser
-  (see "In progress" above).
+- Manually verify institution/account-type-tag editing and the four transactions
+  filters in a real browser (see "In progress" above).
 - Transaction categorization (AI/merchant-based) and a full transaction-editing
-  UI (the list view now has filters/sort/pagination, but rows still aren't
-  editable and have no category). The `transactions` table now actually gets
-  populated, checked, self-corrected, and scored for confidence
+  UI (the list view now has filters/sort/pagination and statement-level institution/
+  account-type tags are editable, but individual transaction rows still aren't
+  editable and have no category of their own). The `transactions` table now actually
+  gets populated, checked, self-corrected, and scored for confidence
   (Phase 6+7+8+9+10), so this is the natural next
   consumer-facing feature.
 - Dedup/idempotency guard on statement reprocessing — see "Known broken" above.

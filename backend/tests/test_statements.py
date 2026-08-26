@@ -1060,6 +1060,349 @@ def test_update_statement_currency_clears_override(make_token) -> None:
     assert own_statement.currency is None
 
 
+def test_get_statement_institution_requires_auth() -> None:
+    response = client.get(f"/api/statements/{uuid.uuid4()}/institution")
+    assert response.status_code == 401
+
+
+def test_get_statement_institution_rejects_other_users_statement(make_token) -> None:
+    other_user_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="not-mine.pdf",
+        storage_path="somewhere/not-mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+    )
+    _use_fake_db(FakeSession([other_user_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{other_user_statement.id}/institution",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_statement_institution_falls_back_to_default_when_nothing_known(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis=None,
+        institution=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/institution",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["institution"] is None
+    assert body["source"] == "default"
+    assert body["detected_institution"] is None
+
+
+def test_get_statement_institution_uses_detected_value(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "institution": "Chase"},
+        institution=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/institution",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["institution"] == "Chase"
+    assert body["source"] == "detected"
+    assert body["detected_institution"] == "Chase"
+
+
+def test_get_statement_institution_prefers_user_override(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "institution": "Chase"},
+        institution="My Bank",
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/institution",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["institution"] == "My Bank"
+    assert body["source"] == "override"
+    assert body["detected_institution"] == "Chase"
+
+
+def test_update_statement_institution_requires_auth() -> None:
+    response = client.patch(
+        f"/api/statements/{uuid.uuid4()}/institution", json={"institution": "My Bank"}
+    )
+    assert response.status_code == 401
+
+
+def test_update_statement_institution_sets_override(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "institution": "Chase"},
+        institution=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.patch(
+        f"/api/statements/{own_statement.id}/institution",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"institution": "  My   Bank  "},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["institution"] == "My Bank"
+    assert body["source"] == "override"
+    assert own_statement.institution == "My Bank"
+
+
+def test_update_statement_institution_reset_to_null_falls_back_to_detected(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "institution": "Chase"},
+        institution="My Bank",
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.patch(
+        f"/api/statements/{own_statement.id}/institution",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"institution": None},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["institution"] == "Chase"
+    assert body["source"] == "detected"
+    assert own_statement.institution is None
+
+
+def test_get_statement_account_type_tags_requires_auth() -> None:
+    response = client.get(f"/api/statements/{uuid.uuid4()}/account-type-tags")
+    assert response.status_code == 401
+
+
+def test_get_statement_account_type_tags_rejects_other_users_statement(make_token) -> None:
+    other_user_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="not-mine.pdf",
+        storage_path="somewhere/not-mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+    )
+    _use_fake_db(FakeSession([other_user_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{other_user_statement.id}/account-type-tags",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_statement_account_type_tags_normalizes_detected_value(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={
+            "document_type": "bank_statement",
+            "account_type": "checking_and_savings",
+        },
+        account_type_tags=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get(
+        f"/api/statements/{own_statement.id}/account-type-tags",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_type_tags"] == ["checking", "savings"]
+    assert body["source"] == "detected"
+    assert body["detected_account_type_tags"] == ["checking", "savings"]
+
+
+def test_update_statement_account_type_tags_sets_override(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "account_type": "checking"},
+        account_type_tags=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.patch(
+        f"/api/statements/{own_statement.id}/account-type-tags",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"account_type_tags": ["Checking", "Savings", "checking"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_type_tags"] == ["checking", "savings"]
+    assert body["source"] == "override"
+    assert own_statement.account_type_tags == ["checking", "savings"]
+
+
+def test_update_statement_account_type_tags_can_be_cleared_to_empty_list(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "account_type": "checking"},
+        account_type_tags=None,
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.patch(
+        f"/api/statements/{own_statement.id}/account-type-tags",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"account_type_tags": []},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_type_tags"] == []
+    assert body["source"] == "override"
+    assert body["detected_account_type_tags"] == ["checking"]
+    assert own_statement.account_type_tags == []
+
+
+def test_update_statement_account_type_tags_reset_to_null_falls_back_to_detected(
+    make_token,
+) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={"document_type": "bank_statement", "account_type": "checking"},
+        account_type_tags=["custom"],
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.patch(
+        f"/api/statements/{own_statement.id}/account-type-tags",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"account_type_tags": None},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_type_tags"] == ["checking"]
+    assert body["source"] == "detected"
+    assert own_statement.account_type_tags is None
+
+
+def test_list_statements_includes_document_type_institution_and_tags(make_token) -> None:
+    own_statement = Statement(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(TEST_USER_ID),
+        filename="mine.pdf",
+        storage_path=f"{TEST_USER_ID}/mine.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        status="ingested",
+        document_analysis={
+            "document_type": "credit_card_statement",
+            "institution": "Chase",
+            "account_type": "credit_card",
+        },
+        institution=None,
+        account_type_tags=None,
+        created_at=datetime.now(timezone.utc),
+    )
+    _use_fake_db(FakeSession([own_statement]))
+    token = make_token()
+
+    response = client.get("/api/statements", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    body = response.json()[0]
+    assert body["document_type"] == "credit_card_statement"
+    assert body["institution"] == "Chase"
+    assert body["account_type_tags"] == ["credit card"]
+
+
 def test_delete_statement_rejects_other_users_statement(make_token) -> None:
     other_user_statement = Statement(
         id=uuid.uuid4(),
