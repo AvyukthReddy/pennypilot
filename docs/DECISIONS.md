@@ -4,6 +4,77 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-26, Customizable institution & account-type tags, plus matching transaction filters
+
+`Statement.account_type` (from AI document understanding) was unconstrained free
+text — the same real account type could show up as `"credit_card"`, `"credit card"`,
+or `"checking_and_savings"` across different statements, with no normalization
+anywhere. The ask was to turn it into user-editable tags (auto-split from the AI
+value, e.g. `checking_and_savings` → `checking`/`savings`, freely
+addable/removable), make `institution` customizable the same way `currency` already
+is, and add transaction-list filters on account-type tags, document type, and
+institution.
+
+**Two new nullable override columns on `Statement`** (migration `07f7b7d96535`):
+`institution` (`String(255)`) and `account_type_tags` (`JSONB` — no `ARRAY` type
+exists anywhere in this codebase, `JSONB` is the established list-column convention
+via `Statement.pages`). Both follow `currency`'s existing override/detected/default
+precedence. The one non-obvious semantic: for `account_type_tags`, `None` means "no
+override, use the detected/normalized value" but an **explicit `[]`** means the user
+cleared every tag and detection must *not* be used as a fallback — the resolver
+checks `is not None`, not truthiness. A PATCH with `tags: null` resets to
+auto-detected (same as `currency`'s reset); a PATCH with `tags: []` overrides to "no
+tags."
+
+**Why a shared `backend/app/services/statement_fields.py` instead of extending
+`statements.py` the way `_resolve_currency` does**: `_resolve_currency` only has one
+call site (`statements.py`'s own GET/PATCH), so it stays put. `resolve_institution`/
+`resolve_account_type_tags` need call sites in *both* `statements.py` (the new
+GET/PATCH endpoints, and `StatementRead`) and `transactions.py` (filtering) —
+importing router-to-router would be a layering smell, so they live in `services/`
+instead (the existing precedent for logic shared across routers, e.g.
+`services/storage.py`), alongside `normalize_account_type_tags` (splits on `,` `&`
+`+` `/` and the word "and"; underscores become spaces first so `credit_card`/
+`credit card` converge on one tag; lowercased, whitespace-collapsed, order-preserving
+dedup).
+
+**Transactions filtering for `institution`/`account_type_tag` can't be a plain SQL
+`WHERE`** — override resolution requires reading both the override column and the
+JSONB-nested detected value in Python. Rather than mixing that with a separate SQL
+JSONB filter for `document_type` (which has no override), all three are folded into
+one `_matching_statement_ids` helper in `transactions.py`: it loads the caller's
+statements, resolves each one's effective values, and turns the result into a single
+`Transaction.statement_id.in_(...)` clause — one consistent code path instead of two
+different filtering strategies. **Match semantics** (confirmed with the user): OR
+within one filter's selected values, AND across the three filter dimensions (and the
+pre-existing filters) — e.g. picking two institutions matches either; picking an
+institution *and* a tag requires both.
+
+**`StatementRead` (`GET /api/statements`) gained `document_type`/`institution`/
+`account_type_tags`** so the transactions page can build its filter-option dropdowns
+from data it already fetches, the same way it already did for filenames. These
+aren't plain ORM columns (`institution`/`account_type_tags` need resolution;
+`document_type` lives inside the `document_analysis` JSONB blob), so
+`list_statements`/`upload_statement_file` build `StatementRead` explicitly via a new
+`_to_statement_read` helper instead of relying on `response_model`'s implicit
+ORM-attribute conversion.
+
+**Frontend**: `institution-editor.tsx`/`account-type-tags-editor.tsx` are
+self-contained (own GET+PATCH), not routed through a shared Context like
+`currency-context.tsx` — nothing else on the page needs their resolved value, unlike
+currency which three sibling components format amounts with. Institution is a
+free-text `<input>`, not a `<select>` like currency's `SUPPORTED_CURRENCIES` dropdown
+— there's no fixed, closed set of institution names to pick from. Tags PATCH the
+entire array on every add/remove rather than batching into a separate Save step,
+matching how the filter comboboks already commit per-click.
+
+The transactions-page filter combobox that used to be document-filename-specific
+(`document-name-filter.tsx`) was generalized into
+`components/shared/multi-select-filter.tsx` (`options: string[]` passed in instead
+of self-fetched) and is now reused for all four filters (document, institution,
+account type, document type) — building it four times over would have been
+excessive duplication of the same ~100 lines; the original file is deleted.
+
 ## 2026-08-26, Transactions list gets filters, sorting, and page-based pagination
 
 `GET /api/transactions` (`backend/app/api/transactions.py`) gained `document_name`

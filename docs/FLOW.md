@@ -399,13 +399,18 @@ statements/analysis/transaction-regions-view.tsx`, `components/statements/analys
    `/progress` returns `{ statement_id, status, processing_stage,
    processing_detail, parse_error }` straight off the row (no JSONB
    unwrapping needed), validated against `StatementProgressRead`
-   (all in `backend/app/schemas/statement.py`). None of these
-   are folded into `StatementRead` (used by the statements list) — each can be
-   much larger than everything else in that response, except
-   `processing_stage`/`processing_detail` themselves, which *are* added to
-   `StatementRead` too (cheap scalars), even though `components/statements/statements-list.tsx`
-   only reads `status` off it today; the fields are there for a future list-
-   level progress indicator without a schema change.
+   (all in `backend/app/schemas/statement.py`). None of the larger blobs
+   (`pages`/`transaction_regions`/etc.) are folded into `StatementRead` (used by the
+   statements list) — each can be much larger than everything else in that response.
+   `processing_stage`/`processing_detail` *are* added to `StatementRead` (cheap
+   scalars), even though `components/statements/statements-list.tsx` only reads
+   `status` off it today — the fields are there for a future list-level progress
+   indicator without a schema change. `document_type`/`institution`/
+   `account_type_tags` are also added to `StatementRead` (see point 6 below) — unlike
+   the progress fields these aren't plain columns, so `list_statements` and
+   `upload_statement_file` build `StatementRead` explicitly via a new
+   `_to_statement_read` helper instead of relying on `response_model`'s implicit
+   ORM-attribute conversion.
 4. Each page in the text-blocks viewer renders as a collapsible `<details>` (first
    page open, rest collapsed) with a table of `text_blocks` —
    `x`/`y`/`width`/`height`/`text`.
@@ -426,6 +431,34 @@ statements/analysis/transaction-regions-view.tsx`, `components/statements/analys
    `document_analysis.currency` (AI-detected), then a `"USD"` default,
    returning whichever it picked as `source`; `PATCH` with `{ currency: null
    }` clears the override.
+6. Institution and account-type tags follow the same override/detected/default shape
+   as currency, but each is self-contained (no shared Context — unlike currency,
+   nothing else on this page needs their resolved value) and lives in
+   `document-analysis-summary.tsx`'s `<dl>` in place of what used to be plain,
+   conditionally-rendered text. `components/statements/analysis/institution-editor.tsx`
+   GETs `GET /api/statements/{id}/institution` via `statementsEndpoints.institution`
+   on mount, shows `"{institution ?? "Not set"} ({source}) Edit"`, and on edit swaps to
+   a free-text `<input>` (not a dropdown — institutions aren't a fixed list like
+   currency codes) with Save/Cancel and, when `source === "override"`, a "Reset to
+   auto-detected" button that PATCHes `{ institution: null }`.
+   `components/statements/analysis/account-type-tags-editor.tsx` GETs
+   `GET /api/statements/{id}/account-type-tags` via
+   `statementsEndpoints.accountTypeTags`, renders `account_type_tags` as removable
+   chips plus an add-tag input (Enter/comma commits), and PATCHes the *entire* new tag
+   array immediately on every add/remove (no separate Save step). Backend:
+   `backend/app/services/statement_fields.py`'s `resolve_institution`/
+   `resolve_account_type_tags` mirror `statements.py`'s `_resolve_currency` precedence
+   (override → detected → default) but live in a shared service module, not
+   `statements.py` itself, because `backend/app/api/transactions.py` needs the same
+   resolvers for its filters (see point 3 in the section below).
+   `resolve_account_type_tags` calls `normalize_account_type_tags` (same module) on
+   `document_analysis.account_type` to turn the AI's free-text value (e.g.
+   `"checking_and_savings"`, `"credit_card"`) into clean lowercase tags (e.g.
+   `["checking", "savings"]`, `["credit card"]`) whenever there's no user override.
+   `Statement.account_type_tags` being `None` means "no override, use detected";
+   an explicit `[]` (set via `PATCH {account_type_tags: []}`) means the user
+   deliberately cleared every tag, which must NOT fall back to detected — the
+   resolver checks `is not None`, not truthiness, to preserve this distinction.
 
 ## Transactions list (standalone page)
 
@@ -434,29 +467,49 @@ statements/analysis/transaction-regions-view.tsx`, `components/statements/analys
    navigating here from the statements list with a specific statement in mind) and
    renders `components/transactions/transactions-list.tsx` with those as
    `initialStatementId`/`initialFilename`.
-2. `transactions-list.tsx` holds filter/sort/page state (`statementId`, `documentNames`
-   — an array, not a single string — `type`, `startDate`, `endDate`, `sortBy`,
-   `sortOrder`, `page`). `documentNames` is set by
-   `components/transactions/document-name-filter.tsx`, a multi-select combobox that
-   fetches the caller's statements via `GET /api/statements` (already returns
-   `filename`), dedupes/sorts them, and lets the user type to narrow a dropdown of
-   not-yet-picked filenames — clicking one adds it as a removable chip (multiple can be
-   selected before closing the dropdown) and resets `page` to 1; typing alone never
-   applies a filter. On any filter/sort change, `transactions-list.tsx` calls
-   `transactionsEndpoints.list(...)` (`constants/endpoints/transactions.endpoints.ts`)
-   via `use-api-request.ts` to `GET /api/transactions` with the matching query params
-   (`statement_id`/`document_name`/`type`/`start_date`/`end_date`/`sort_by`/
-   `sort_order`/`page`/`page_size`). Changing any filter or the sort resets `page` to 1.
+2. `transactions-list.tsx` holds filter/sort/page state (`statementId`, `documentNames`,
+   `documentTypes`, `institutions`, `accountTypeTags` — each an array — `type`,
+   `startDate`, `endDate`, `sortBy`, `sortOrder`, `page`). On mount it fetches
+   `GET /api/statements` **once** (via `statementsEndpoints.list()`, which now returns
+   `filename`/`document_type`/`institution`/`account_type_tags` per statement) and
+   derives three option lists with `useMemo` — distinct filenames, distinct non-null
+   institutions, distinct flattened tags. `document_type`'s options are a static
+   3-value array (`constants/document-analysis.constants.ts`'s
+   `DOCUMENT_TYPE_OPTIONS`/`DOCUMENT_TYPE_LABELS`, shared with
+   `document-analysis-summary.tsx` so the labels aren't duplicated) — no fetch needed.
+   Each of the four filters renders as a `components/shared/multi-select-filter.tsx`
+   instance — a generalized version of what used to be a document-filename-only
+   combobox (`document-name-filter.tsx`, now deleted): `options: string[]` and an
+   optional `optionLabel(value)` are passed in instead of the component fetching its
+   own data, so the same combobox mechanics (type to narrow, click an option to add it
+   as a removable chip, free text alone never becomes a filter) serve all four. On any
+   filter/sort change, `transactions-list.tsx` calls `transactionsEndpoints.list(...)`
+   (`constants/endpoints/transactions.endpoints.ts`) via `use-api-request.ts` to
+   `GET /api/transactions` with the matching query params (`statement_id`/
+   `document_name`/`document_type`/`institution`/`account_type_tag`/`type`/
+   `start_date`/`end_date`/`sort_by`/`sort_order`/`page`/`page_size`). Changing any
+   filter or the sort resets `page` to 1.
 3. `backend/app/api/transactions.py`'s `list_transactions` builds a `Transaction`
    query scoped to the caller (`user_id`), adds `statement_id`/`type`
    (`amount > 0`/`amount < 0` for credit/debit)/`start_date`/`end_date` as `.where()`
    clauses, joins `Statement` only when `document_name` is set (`Statement.filename.
    in_(document_name)` — `document_name` is a repeatable query param, exact match
-   against one or more filenames, not substring), orders by the requested
-   `sort_by`/`sort_order` (with a
-   `created_at desc` tiebreak), and paginates via `page`/`page_size` (`LIMIT`/
-   `OFFSET` computed from them). Returns `TransactionListRead` — `items`, `total`,
-   `page`, `page_size`, `total_pages` (`backend/app/schemas/transaction.py`).
+   against one or more filenames, not substring). `document_type`/`institution`/
+   `account_type_tag` are handled separately by `_matching_statement_ids`: since
+   `institution`/`account_type_tag` need the same override-aware resolution as the
+   customization feature above (not expressible as a plain SQL `WHERE`),
+   `document_type` is folded into the same Python-side pass for one consistent code
+   path — it loads all the caller's statements, resolves each one's effective
+   `document_type`/`institution`/`account_type_tags`
+   (`app.services.statement_fields`'s `resolve_institution`/`resolve_account_type_tags`,
+   `document_type` read straight off `document_analysis`), and returns the matching
+   statement ids (OR within one filter's selected values, AND across the three filter
+   dimensions — confirmed with the user, matches how `type`/dates/`document_name`
+   already AND together) as a `Transaction.statement_id.in_(...)` clause. Orders by the
+   requested `sort_by`/`sort_order` (with a `created_at desc` tiebreak), and paginates
+   via `page`/`page_size` (`LIMIT`/`OFFSET` computed from them). Returns
+   `TransactionListRead` — `items`, `total`, `page`, `page_size`, `total_pages`
+   (`backend/app/schemas/transaction.py`).
 4. The list renders as rows (date/description/signed amount) with Previous/Next
    buttons and a "Page X of Y" label driven by `total_pages`/`total` — no
    accumulate-in-place "load more" behavior. See `docs/DECISIONS.md`'s 2026-08-26
