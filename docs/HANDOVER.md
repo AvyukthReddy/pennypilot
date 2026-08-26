@@ -210,6 +210,19 @@ request-flow maps).
   repo-root build context that existed solely to let the worker image reach it was
   reverted (`docker/docker-compose.yml`, `worker/Dockerfile` back to
   `context: ../worker`); the root `.dockerignore` that went with it was removed too.
+- **Transactions list**: `GET /api/transactions` (`backend/app/api/transactions.py`)
+  supports `document_name` (repeatable query param, exact match against
+  `Statement.filename` via `.in_(...)`, joined only when set)/`type` (`credit`/`debit`,
+  mapped to `amount > 0`/`< 0`)/`start_date`/`end_date` filters, `sort_by`/`sort_order`,
+  and page-based pagination (`page`/`page_size` in, `total_pages` out — replaced the
+  old `limit`/`offset` shape). Frontend: `frontend/src/app/transactions/page.tsx`
+  renders `components/transactions/transactions-list.tsx`, which now has filter inputs
+  — including `components/transactions/document-name-filter.tsx`, a multi-select
+  combobox (type to narrow, click to add as a removable chip) fed by the caller's real
+  statement filenames from `GET /api/statements`, not free text — a type select, from/to
+  date inputs, a sort dropdown + direction toggle, and Previous/Next pagination instead
+  of the old "Load more" button. See [DECISIONS.md](DECISIONS.md)'s 2026-08-26 entry
+  and [FLOW.md](FLOW.md)'s "Transactions list (standalone page)" section.
 - **Postgres RLS**: `users`, `statements`, and `transactions` all have Row Level
   Security enabled with an `auth.uid() = user_id` owner policy (`alembic_version` has
   RLS on with no policy, fully locking it out of the API). This closes a real gap
@@ -221,7 +234,13 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: a folder-structure
+- Nothing currently in flight. Last completed unit of work: transactions list
+  filters/sort/pagination (see "Where things stand" above). Not yet manually
+  verified in a browser — the Chrome automation tool was unresponsive when this was
+  built; `tsc --noEmit`, `eslint src/`, `npm run build`, and the full backend pytest
+  suite (77 passed) are all clean, but click through `/transactions` for real before
+  calling this done.
+- Before that: a folder-structure
   refactor of `frontend/src/` for clean architecture — no functional/UI changes.
   `components/` was flat (20 files mixing 5 unrelated feature domains); it's now
   grouped as `components/{shared,landing,dashboard,settings,statements,transactions}/`,
@@ -322,10 +341,13 @@ request-flow maps).
   all skipped for these too. Also
   not yet scoped (which OCR engine/vision API, whether it produces the same
   `Page`/`text_blocks` shape or something else).
+- Manually verify the new transactions filters/sort/pagination in a real browser
+  (see "In progress" above).
 - Transaction categorization (AI/merchant-based) and a full transaction-editing
-  UI. The `transactions` table now actually gets populated, checked,
-  self-corrected, and scored for confidence (Phase 6+7+8+9+10), so this is
-  the natural next
+  UI (the list view now has filters/sort/pagination, but rows still aren't
+  editable and have no category). The `transactions` table now actually gets
+  populated, checked, self-corrected, and scored for confidence
+  (Phase 6+7+8+9+10), so this is the natural next
   consumer-facing feature.
 - Dedup/idempotency guard on statement reprocessing — see "Known broken" above.
 - Surfacing `financial_validation`/`transaction_verification`/`confidence`

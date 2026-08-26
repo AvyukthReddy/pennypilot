@@ -4,6 +4,51 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-26, Transactions list gets filters, sorting, and page-based pagination
+
+`GET /api/transactions` (`backend/app/api/transactions.py`) gained `document_name`
+(icontains against `Statement.filename`, joined in only when the filter is present),
+`type` (`credit`/`debit`, mapped to `amount > 0`/`amount < 0` — the extraction pipeline
+already stores debit negative/credit positive, see `worker/worker/transaction_schema.py`),
+`start_date`/`end_date` (inclusive range on `transaction_date`), and `sort_by`
+(`transaction_date`/`amount`/`description`/`created_at`) + `sort_order` (`asc`/`desc`,
+`transaction_date desc` stays the default). `TransactionListRead` switched from
+`limit`/`offset` to `page`/`page_size`/`total_pages` (`total_pages = ceil(total /
+page_size)`, `0` when there are no results) — a breaking response-shape change, but
+nothing outside this codebase consumed the old shape yet.
+
+**Why page-based instead of keeping offset-based "load more":** the ask was explicit
+UI pagination (page numbers / Previous-Next), which reads far more naturally off
+`page`/`total_pages` than off raw `offset`. `frontend/src/components/transactions/
+transactions-list.tsx` (the standalone `/transactions` page) now renders filter inputs
+(document name, type, from/to date), a sort-by dropdown + direction toggle, and
+Previous/Next controls with a "Page X of Y" label instead of the old accumulate-in-place
+"Load more" button — changing any filter/sort resets to page 1. The two other
+`transactionsEndpoints.list` callers (`components/dashboard/recent-activity.tsx`,
+`components/statements/analysis/transactions-view.tsx`) don't need the new filters —
+they just moved from `limit` to `page: 1, pageSize: N`.
+
+**How to apply**: any future transaction-list consumer should read `page`/`page_size`/
+`total_pages`, not `limit`/`offset`. If another entity ever needs the same list-with-
+filters shape, `document_name`'s join-only-when-needed pattern (join added to both the
+`select` and the `count` query only if that filter is actually set) is the template —
+avoids paying a join cost when nobody asked to filter by it.
+
+The document-name filter itself is a multi-select combobox
+(`components/transactions/document-name-filter.tsx`), not free text: it fetches the
+caller's statements via the existing `GET /api/statements` (already returns
+`filename`, so no new endpoint), dedupes/sorts the filenames, and lets typing narrow
+a dropdown of not-yet-selected filenames — but a filename is only added (as a
+removable chip) when its option is actually clicked, and multiple can be picked
+before closing the dropdown. **Why**: the ask was explicitly that users pick from
+real filenames rather than type arbitrary text, then that they be able to pick more
+than one. Because selection is now exact-match-from-a-known-list rather than partial
+text, `GET /api/transactions`'s `document_name` query param became repeatable
+(`list[str] | None = Query(None)` in `backend/app/api/transactions.py`) and the
+filter switched from `Statement.filename.ilike(...)` to `Statement.filename.in_(...)`
+— exact match, not substring, since every value now comes from a real filename the
+user clicked rather than typed text that might only partially match.
+
 ## 2026-08-25, Frontend folder-structure refactor (feature grouping, no functional change)
 
 `frontend/src/components/` had grown to 20 flat files spanning 5 unrelated feature

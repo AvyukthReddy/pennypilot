@@ -3,14 +3,28 @@
 import { useEffect, useState } from "react";
 
 import { APP_METHOD } from "@/constants/app.constants";
-import { transactionsEndpoints } from "@/constants/endpoints/transactions.endpoints";
+import {
+  transactionsEndpoints,
+  type SortOrder,
+  type TransactionSortBy,
+  type TransactionType,
+} from "@/constants/endpoints/transactions.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
 import { formatSignedCurrency } from "@/lib/format-currency";
+import { FORM_INPUT_CLASS } from "@/constants/form.constants";
 import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
 import { TransactionRowSkeleton } from "@/components/shared/skeleton";
+import { DocumentNameFilter } from "@/components/transactions/document-name-filter";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 25;
 const SKELETON_ROW_COUNT = 5;
+
+const SORT_OPTIONS: { value: TransactionSortBy; label: string }[] = [
+  { value: "transaction_date", label: "Date" },
+  { value: "amount", label: "Amount" },
+  { value: "description", label: "Description" },
+  { value: "created_at", label: "Date added" },
+];
 
 type Transaction = {
   id: string;
@@ -26,8 +40,9 @@ type Transaction = {
 type TransactionListResponse = {
   items: Transaction[];
   total: number;
-  limit: number;
-  offset: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 };
 
 export function TransactionsList({
@@ -38,42 +53,71 @@ export function TransactionsList({
   initialFilename?: string;
 }) {
   const [statementId, setStatementId] = useState(initialStatementId);
+  const [documentNames, setDocumentNames] = useState<string[]>([]);
+  const [type, setType] = useState<TransactionType | "">("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("transaction_date");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+  const [page, setPage] = useState(1);
+
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const listRequest = useApiRequest<TransactionListResponse>();
 
-  function loadMore() {
-    listRequest
-      .run(
-        transactionsEndpoints.list({ statementId, limit: PAGE_SIZE, offset: transactions.length }),
-        APP_METHOD.GET,
-      )
-      .then((data) => {
-        if (!data) return;
-        setTotal(data.total);
-        setTransactions((prev) => [...prev, ...data.items]);
-      });
+  function handleDocumentNamesChange(filenames: string[]) {
+    setDocumentNames(filenames);
+    setPage(1);
   }
 
   useEffect(() => {
     // The previous filter's rows staying visible until the new page arrives
     // (replacing them) is an acceptable brief "stale while loading" state.
     listRequest
-      .run(transactionsEndpoints.list({ statementId, limit: PAGE_SIZE, offset: 0 }), APP_METHOD.GET)
+      .run(
+        transactionsEndpoints.list({
+          statementId,
+          documentNames: documentNames.length ? documentNames : undefined,
+          type: type || undefined,
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+          sortBy,
+          sortOrder,
+          page,
+          pageSize: PAGE_SIZE,
+        }),
+        APP_METHOD.GET,
+      )
       .then((data) => {
         if (!data) return;
         setTotal(data.total);
+        setTotalPages(data.total_pages);
         setTransactions(data.items);
       });
     // listRequest.run is stable (useCallback with no deps), safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statementId]);
+  }, [statementId, documentNames, type, startDate, endDate, sortBy, sortOrder, page]);
 
-  function clearFilter() {
+  function clearStatementFilter() {
     setStatementId(undefined);
+    setPage(1);
   }
 
-  const hasMore = transactions.length < total;
+  function toggleSortOrder() {
+    setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
+    setPage(1);
+  }
+
+  const hasFilters = documentNames.length > 0 || type || startDate || endDate;
+
+  function clearAllFilters() {
+    setDocumentNames([]);
+    setType("");
+    setStartDate("");
+    setEndDate("");
+    setPage(1);
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -85,13 +129,96 @@ export function TransactionsList({
           </span>
           <button
             type="button"
-            onClick={clearFilter}
+            onClick={clearStatementFilter}
             className="font-medium text-black underline dark:text-zinc-50"
           >
             Clear filter
           </button>
         </div>
       )}
+
+      <div className="flex flex-wrap items-end gap-3">
+        <DocumentNameFilter value={documentNames} onChange={handleDocumentNamesChange} />
+
+        <label className="flex flex-col gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+          Type
+          <select
+            value={type}
+            onChange={(e) => {
+              setType(e.target.value as TransactionType | "");
+              setPage(1);
+            }}
+            className={FORM_INPUT_CLASS}
+          >
+            <option value="">All</option>
+            <option value="credit">Credit</option>
+            <option value="debit">Debit</option>
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+          From
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => {
+              setStartDate(e.target.value);
+              setPage(1);
+            }}
+            className={FORM_INPUT_CLASS}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+          To
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => {
+              setEndDate(e.target.value);
+              setPage(1);
+            }}
+            className={FORM_INPUT_CLASS}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+          Sort by
+          <select
+            value={sortBy}
+            onChange={(e) => {
+              setSortBy(e.target.value as TransactionSortBy);
+              setPage(1);
+            }}
+            className={FORM_INPUT_CLASS}
+          >
+            {SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          type="button"
+          onClick={toggleSortOrder}
+          title={sortOrder === "asc" ? "Ascending" : "Descending"}
+          className="rounded-md border-2 border-black px-3 py-2 text-sm font-medium text-black hover:bg-black hover:text-white dark:border-zinc-50 dark:text-zinc-50 dark:hover:bg-zinc-50 dark:hover:text-black"
+        >
+          {sortOrder === "asc" ? "↑ Asc" : "↓ Desc"}
+        </button>
+
+        {hasFilters && (
+          <button
+            type="button"
+            onClick={clearAllFilters}
+            className="text-xs font-medium text-black underline dark:text-zinc-50"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
 
       {(!listRequest.hasSettled || listRequest.loading) && transactions.length === 0 && (
         <ul className="flex flex-col divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -105,7 +232,7 @@ export function TransactionsList({
 
       {listRequest.hasSettled && !listRequest.loading && !listRequest.error && transactions.length === 0 && (
         <EmptyText>
-          {statementId ? "No transactions for this statement." : "No transactions yet."}
+          {statementId || hasFilters ? "No transactions match these filters." : "No transactions yet."}
         </EmptyText>
       )}
 
@@ -138,15 +265,30 @@ export function TransactionsList({
         </ul>
       )}
 
-      {hasMore && (
-        <button
-          type="button"
-          onClick={loadMore}
-          disabled={listRequest.loading}
-          className="self-center rounded-md border-2 border-black px-4 py-2 text-sm font-medium text-black hover:bg-black hover:text-white disabled:opacity-50 dark:border-zinc-50 dark:text-zinc-50 dark:hover:bg-zinc-50 dark:hover:text-black"
-        >
-          {listRequest.loading ? "Loading…" : "Load more"}
-        </button>
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between gap-3 pt-2">
+          <span className="text-xs text-zinc-500 dark:text-zinc-400">
+            Page {page} of {totalPages} ({total} transactions)
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1 || listRequest.loading}
+              className="rounded-md border-2 border-black px-3 py-1.5 text-sm font-medium text-black hover:bg-black hover:text-white disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-black dark:border-zinc-50 dark:text-zinc-50 dark:hover:bg-zinc-50 dark:hover:text-black dark:disabled:hover:text-zinc-50"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages || listRequest.loading}
+              className="rounded-md border-2 border-black px-3 py-1.5 text-sm font-medium text-black hover:bg-black hover:text-white disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-black dark:border-zinc-50 dark:text-zinc-50 dark:hover:bg-zinc-50 dark:hover:text-black dark:disabled:hover:text-zinc-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -71,8 +71,9 @@ def test_list_transactions_returns_items(make_token) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == 1
-    assert body["limit"] == 50
-    assert body["offset"] == 0
+    assert body["page"] == 1
+    assert body["page_size"] == 50
+    assert body["total_pages"] == 1
     assert len(body["items"]) == 1
     assert body["items"][0]["description"] == "Coffee Shop"
     assert body["items"][0]["amount"] == "-4.50"
@@ -84,15 +85,16 @@ def test_list_transactions_echoes_pagination_params(make_token) -> None:
     token = make_token()
 
     response = client.get(
-        "/api/transactions?limit=10&offset=20",
+        "/api/transactions?page=3&page_size=10",
         headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["limit"] == 10
-    assert body["offset"] == 20
+    assert body["page"] == 3
+    assert body["page_size"] == 10
     assert body["total"] == 137
+    assert body["total_pages"] == 14
 
 
 def test_list_transactions_accepts_statement_id_filter(make_token) -> None:
@@ -108,13 +110,38 @@ def test_list_transactions_accepts_statement_id_filter(make_token) -> None:
     assert response.status_code == 200
 
 
-def test_list_transactions_rejects_out_of_range_limit(make_token) -> None:
+def test_list_transactions_rejects_out_of_range_page_size(make_token) -> None:
     _use_fake_db(FakeSession([]))
     token = make_token()
 
     response = client.get(
-        "/api/transactions?limit=500",
+        "/api/transactions?page_size=500",
         headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 422
+
+
+def test_list_transactions_accepts_document_name_filter(make_token) -> None:
+    _use_fake_db(FakeSession([]))
+    token = make_token()
+
+    response = client.get(
+        "/api/transactions?document_name=chase-jan.pdf&document_name=chase-feb.pdf",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_list_transactions_accepts_type_and_date_filters(make_token) -> None:
+    _use_fake_db(FakeSession([]))
+    token = make_token()
+
+    response = client.get(
+        "/api/transactions?type=debit&start_date=2026-01-01&end_date=2026-01-31"
+        "&sort_by=amount&sort_order=asc",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200

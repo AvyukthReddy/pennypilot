@@ -24,8 +24,9 @@ type Transaction = {
 type TransactionListResponse = {
   items: Transaction[];
   total: number;
-  limit: number;
-  offset: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 };
 
 function TransactionsSkeleton() {
@@ -46,7 +47,7 @@ export function TransactionsView({ statementId }: { statementId: string }) {
 
   useEffect(() => {
     listRequest
-      .run(transactionsEndpoints.list({ statementId, limit: MAX_ROWS }), APP_METHOD.GET)
+      .run(transactionsEndpoints.list({ statementId, page: 1, pageSize: MAX_ROWS }), APP_METHOD.GET)
       .then((data) => {
         if (!data) return;
         setTransactions(data.items);
