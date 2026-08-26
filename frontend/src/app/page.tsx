@@ -3,8 +3,8 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
-import { DashboardPreview } from "@/components/dashboard-preview";
-import { FeatureCard } from "@/components/feature-card";
+import { DashboardPreview } from "@/components/landing/dashboard-preview";
+import { FeatureCard } from "@/components/landing/feature-card";
 import {
   ChartIcon,
   ChatIcon,
@@ -12,7 +12,7 @@ import {
   ReceiptIcon,
   SparkleIcon,
   TrendIcon,
-} from "@/components/icons";
+} from "@/components/landing/icons";
 
 const features = [
   {
