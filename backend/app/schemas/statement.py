@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 class StatementRead(BaseModel):
@@ -15,6 +15,8 @@ class StatementRead(BaseModel):
     parse_error: str | None = None
     page_count: int | None = None
     needs_ocr: bool | None = None
+    processing_stage: str | None = None
+    processing_detail: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -166,3 +168,30 @@ class StatementConfidenceRead(BaseModel):
     status: Literal["validated", "needs_review", "unreliable"] | None
     warnings: list[str]
     breakdown: ConfidenceBreakdownRead | None
+
+
+CurrencySource = Literal["override", "detected", "default"]
+
+
+class StatementCurrencyRead(BaseModel):
+    statement_id: uuid.UUID
+    currency: str
+    source: CurrencySource
+    detected_currency: str | None = None
+
+
+class StatementCurrencyUpdate(BaseModel):
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+
+    @field_validator("currency")
+    @classmethod
+    def _uppercase(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+
+class StatementProgressRead(BaseModel):
+    statement_id: uuid.UUID
+    status: str
+    processing_stage: str | None
+    processing_detail: str | None
+    parse_error: str | None

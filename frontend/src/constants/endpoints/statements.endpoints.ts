@@ -5,6 +5,7 @@ export const statementsEndpoints = {
   upload: () => getApiUrl("/api/statements"),
   view: (id: string) => getApiUrl(`/api/statements/${id}/view`),
   pages: (id: string) => getApiUrl(`/api/statements/${id}/pages`),
+  progress: (id: string) => getApiUrl(`/api/statements/${id}/progress`),
   analysis: (id: string) => getApiUrl(`/api/statements/${id}/analysis`),
   transactionRegions: (id: string) => getApiUrl(`/api/statements/${id}/transaction-regions`),
   transactionSchema: (id: string) => getApiUrl(`/api/statements/${id}/transaction-schema`),
@@ -12,5 +13,6 @@ export const statementsEndpoints = {
     getApiUrl(`/api/statements/${id}/transaction-verification`),
   financialValidation: (id: string) => getApiUrl(`/api/statements/${id}/financial-validation`),
   confidence: (id: string) => getApiUrl(`/api/statements/${id}/confidence`),
+  currency: (id: string) => getApiUrl(`/api/statements/${id}/currency`),
   delete: (id: string) => getApiUrl(`/api/statements/${id}`),
 };

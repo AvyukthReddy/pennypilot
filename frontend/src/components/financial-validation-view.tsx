@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
+import { useCurrency } from "@/components/currency-context";
+import { formatCurrency } from "@/lib/format-currency";
 import { Skeleton } from "@/components/skeleton";
 
 type FinancialIssueType =
@@ -69,6 +71,7 @@ function ValidationSkeleton() {
 export function FinancialValidationView({ statementId }: { statementId: string }) {
   const [report, setReport] = useState<StatementFinancialValidationResponse | null>(null);
   const validationRequest = useApiRequest<StatementFinancialValidationResponse>();
+  const { currency } = useCurrency();
 
   useEffect(() => {
     validationRequest
@@ -136,17 +139,19 @@ export function FinancialValidationView({ statementId }: { statementId: string }
         <dl className="grid grid-cols-2 gap-x-6 gap-y-1 border-t border-zinc-200 pt-3 text-sm dark:border-zinc-800">
           <dt className="text-zinc-500 dark:text-zinc-400">Beginning balance</dt>
           <dd className="text-black dark:text-zinc-50">
-            {report.balance_check.beginning_balance}
+            {formatCurrency(report.balance_check.beginning_balance, currency)}
           </dd>
           <dt className="text-zinc-500 dark:text-zinc-400">Net change</dt>
-          <dd className="text-black dark:text-zinc-50">{report.balance_check.net_change}</dd>
+          <dd className="text-black dark:text-zinc-50">
+            {formatCurrency(report.balance_check.net_change, currency)}
+          </dd>
           <dt className="text-zinc-500 dark:text-zinc-400">Expected ending balance</dt>
           <dd className="text-black dark:text-zinc-50">
-            {report.balance_check.expected_ending_balance}
+            {formatCurrency(report.balance_check.expected_ending_balance, currency)}
           </dd>
           <dt className="text-zinc-500 dark:text-zinc-400">Actual ending balance</dt>
           <dd className="text-black dark:text-zinc-50">
-            {report.balance_check.actual_ending_balance}
+            {formatCurrency(report.balance_check.actual_ending_balance, currency)}
           </dd>
           <dt className="text-zinc-500 dark:text-zinc-400">Reconciled</dt>
           <dd className="text-black dark:text-zinc-50">

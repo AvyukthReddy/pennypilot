@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
+import { useCurrency } from "@/components/currency-context";
+import { formatCurrency } from "@/lib/format-currency";
 import { Skeleton } from "@/components/skeleton";
 
 type DocumentSection = {
@@ -88,6 +90,7 @@ function SummarySkeleton() {
 export function DocumentAnalysisSummary({ statementId }: { statementId: string }) {
   const [analysis, setAnalysis] = useState<DocumentAnalysis | null>(null);
   const analysisRequest = useApiRequest<StatementAnalysisResponse>();
+  const { currency } = useCurrency();
 
   useEffect(() => {
     analysisRequest
@@ -162,13 +165,17 @@ export function DocumentAnalysisSummary({ statementId }: { statementId: string }
         {analysis.beginning_balance && (
           <>
             <dt className="text-zinc-500 dark:text-zinc-400">Beginning balance</dt>
-            <dd className="text-black dark:text-zinc-50">{analysis.beginning_balance}</dd>
+            <dd className="text-black dark:text-zinc-50">
+              {formatCurrency(analysis.beginning_balance, currency)}
+            </dd>
           </>
         )}
         {analysis.ending_balance && (
           <>
             <dt className="text-zinc-500 dark:text-zinc-400">Ending balance</dt>
-            <dd className="text-black dark:text-zinc-50">{analysis.ending_balance}</dd>
+            <dd className="text-black dark:text-zinc-50">
+              {formatCurrency(analysis.ending_balance, currency)}
+            </dd>
           </>
         )}
       </dl>

@@ -3,6 +3,7 @@ import uuid
 from decimal import Decimal
 
 import httpx
+import pytest
 from reportlab.pdfgen import canvas
 
 import worker.tasks as tasks
@@ -134,6 +135,24 @@ def _patch_understanding(monkeypatch, result=None, error=None):
         "DocumentUnderstandingService",
         lambda: _FakeUnderstandingService(calls, result=result, error=error),
     )
+    return calls
+
+
+def _spy_on_set_stage(monkeypatch) -> list[tuple[str, str | None]]:
+    """Records every (stage, detail) pair tasks._set_stage is called with,
+    while still performing its real side effects (setting stmt.processing_*
+    and committing) so downstream code sees correct state. More reliable
+    than inferring stages from FakeTaskSession.commit() call sites, since
+    plain status-only commits elsewhere in parse_statement would otherwise
+    get misread as stage transitions too."""
+    calls: list[tuple[str, str | None]] = []
+    original = tasks._set_stage
+
+    def _spy(session, stmt, stage, detail=None):
+        calls.append((stage, detail))
+        original(session, stmt, stage, detail)
+
+    monkeypatch.setattr(tasks, "_set_stage", _spy)
     return calls
 
 
@@ -448,6 +467,142 @@ def test_parse_statement_pdf_happy_path(monkeypatch) -> None:
     assert confidence["score"] == 1.0
     assert confidence["status"] == "validated"
     assert confidence["warnings"] == []
+
+
+def test_parse_statement_processing_stage_progression_happy_path(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    stage_calls = _spy_on_set_stage(monkeypatch)
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    # "ingesting" is folded into the initial status="processing" commit, not
+    # via _set_stage, so it isn't captured here; statement.processing_stage
+    # (checked below) confirms it was still set correctly.
+    assert [stage for stage, _ in stage_calls] == [
+        "understanding",
+        "detecting_regions",
+        "discovering_schema",
+        "extracting",  # before the (single-region) loop, detail=None
+        "extracting",  # first (only) region
+        "validating",
+        "scoring_confidence",
+    ]
+    assert statement.processing_stage == "scoring_confidence"
+    assert statement.processing_detail is None
+
+
+def test_parse_statement_processing_detail_tracks_current_region(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    stage_calls = _spy_on_set_stage(monkeypatch)
+    two_regions = TransactionRegionDetection(
+        transaction_regions=[
+            {"page": 1, "region": [45, 180, 570, 730]},
+            {"page": 2, "region": [45, 180, 570, 730]},
+        ],
+    )
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=two_regions)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    extracting_details = [detail for stage, detail in stage_calls if stage == "extracting"]
+    assert extracting_details == [None, "Region 1 of 2", "Region 2 of 2"]
+
+
+def test_parse_statement_processing_stage_reached_despite_downstream_failure(monkeypatch) -> None:
+    statement = _make_statement("application/pdf")
+    stage_calls = _spy_on_set_stage(monkeypatch)
+    _patch_understanding(monkeypatch, error=RuntimeError("model unreachable"))
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    # The "understanding" guard passed (real PDF, not scanned), so its stage
+    # marker was committed before the call itself raised.
+    assert statement.processing_stage == "understanding"
+    assert [stage for stage, _ in stage_calls] == ["understanding"]
+
+
+def test_parse_statement_processing_stage_skips_region_detection_without_transactions_section(
+    monkeypatch,
+) -> None:
+    statement = _make_statement("application/pdf")
+    stage_calls = _spy_on_set_stage(monkeypatch)
+    _patch_understanding(monkeypatch, result=ANALYSIS_WITHOUT_TRANSACTIONS)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    # Neither detecting_regions nor scoring_confidence's guard (same
+    # "has a transactions section" condition) ever passes.
+    assert [stage for stage, _ in stage_calls] == ["understanding"]
+    assert statement.processing_stage == "understanding"
+
+
+def test_parse_statement_processing_stage_jumps_to_confidence_when_region_detection_fails(
+    monkeypatch,
+) -> None:
+    statement = _make_statement("application/pdf")
+    stage_calls = _spy_on_set_stage(monkeypatch)
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, error=RuntimeError("model unreachable"))
+
+    _run_task(monkeypatch, statement, _make_pdf(pages=3))
+
+    # discovering_schema/extracting/validating never get their own stage
+    # commits since transaction_regions stays None, but scoring_confidence's
+    # guard is independent (based on document_analysis, not
+    # transaction_regions), so it still fires right after. Documented v1
+    # behavior: the stepper "jumps forward" over stages that never ran.
+    assert [stage for stage, _ in stage_calls] == [
+        "understanding",
+        "detecting_regions",
+        "scoring_confidence",
+    ]
+
+
+def test_parse_statement_processing_stage_reflects_last_reached_on_hard_failure(
+    monkeypatch,
+) -> None:
+    statement = _make_statement("application/pdf")
+    _patch_understanding(monkeypatch, result=VALID_ANALYSIS)
+    _patch_region_detection(monkeypatch, result=VALID_REGIONS)
+    _patch_schema_discovery(monkeypatch, result=VALID_SCHEMA)
+    _patch_extraction(monkeypatch, result=VALID_EXTRACTION)
+    _patch_verification(monkeypatch, result=VALID_VERIFICATION)
+
+    session = FakeTaskSession(statement)
+
+    def _failing_add_all(rows) -> None:
+        raise RuntimeError("boom")
+
+    session.add_all = _failing_add_all
+    monkeypatch.setattr(tasks, "SessionLocal", lambda: session)
+
+    def _fake_get(url, timeout=60):
+        return httpx.Response(
+            200, content=_make_pdf(pages=3), request=httpx.Request("GET", url)
+        )
+
+    monkeypatch.setattr(tasks.httpx, "get", _fake_get)
+
+    with pytest.raises(RuntimeError):
+        tasks.parse_statement(str(statement.id), "https://example.com/signed?token=SECRET")
+
+    # session.add_all (right before the final commit) isn't wrapped in any
+    # per-phase try/except, so this reaches the outer handler. status flips
+    # to "failed", but processing_stage is left at the last phase actually
+    # reached (every phase ran and committed its own stage marker before
+    # add_all was ever called) rather than reset.
+    assert statement.status == "failed"
+    assert statement.processing_stage == "scoring_confidence"
 
 
 def test_parse_statement_document_understanding_failure_is_non_fatal(monkeypatch) -> None:

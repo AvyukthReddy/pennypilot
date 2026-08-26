@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
-import { APP_METHOD } from "@/constants/app.constants";
+import { APP_METHOD, POLL_INTERVAL_MS } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
 import { Skeleton } from "@/components/skeleton";
@@ -24,7 +24,6 @@ type Statement = {
 };
 
 const NON_TERMINAL_STATUSES = new Set(["uploaded", "queued", "processing"]);
-const POLL_INTERVAL_MS = 4000;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -42,7 +41,8 @@ const STATUS_PILL_STYLES: Record<string, string> = {
 };
 
 function StatusPill({ status }: { status: string }) {
-  const classes = STATUS_PILL_STYLES[status] ?? "bg-zinc-500 text-white dark:bg-zinc-600";
+  const classes =
+    STATUS_PILL_STYLES[status] ?? "bg-zinc-500 text-white dark:bg-zinc-600";
   return (
     <span
       className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${classes}`}
@@ -94,13 +94,17 @@ export function StatementsList() {
   }, []);
 
   useEffect(() => {
-    const hasPending = statements.some((s) => NON_TERMINAL_STATUSES.has(s.status));
+    const hasPending = statements.some((s) =>
+      NON_TERMINAL_STATUSES.has(s.status),
+    );
     if (!hasPending) return;
 
     const interval = setInterval(() => {
-      listRequest.run(statementsEndpoints.list(), APP_METHOD.GET).then((data) => {
-        if (data) setStatements(data);
-      });
+      listRequest
+        .run(statementsEndpoints.list(), APP_METHOD.GET)
+        .then((data) => {
+          if (data) setStatements(data);
+        });
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
@@ -257,14 +261,15 @@ export function StatementsList() {
                     Transactions
                   </Link>
                 )}
-                {statement.status === "ingested" && statement.content_type === "application/pdf" && (
-                  <Link
-                    href={`/statements/analysis?statement_id=${statement.id}&filename=${encodeURIComponent(statement.filename)}`}
-                    className="text-sm font-medium text-black underline dark:text-zinc-50"
-                  >
-                    Text blocks
-                  </Link>
-                )}
+                {(statement.status === "ingested" || statement.status === "processing") &&
+                  statement.content_type === "application/pdf" && (
+                    <Link
+                      href={`/statements/analysis?statement_id=${statement.id}&filename=${encodeURIComponent(statement.filename)}`}
+                      className="text-sm font-medium text-black underline dark:text-zinc-50"
+                    >
+                      {statement.status === "processing" ? "View progress" : "Text blocks"}
+                    </Link>
+                  )}
                 <button
                   type="button"
                   onClick={() => handleView(statement.id)}
