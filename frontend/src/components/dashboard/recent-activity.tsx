@@ -6,7 +6,9 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { transactionsEndpoints } from "@/constants/endpoints/transactions.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { TransactionRowSkeleton } from "@/components/skeleton";
+import { formatSignedCurrency } from "@/lib/format-currency";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { TransactionRowSkeleton } from "@/components/shared/skeleton";
 
 const RECENT_LIMIT = 5;
 
@@ -21,12 +23,6 @@ type TransactionListResponse = {
   items: Transaction[];
   total: number;
 };
-
-function formatAmount(amount: string): string {
-  const value = Number(amount);
-  const sign = value >= 0 ? "+" : "-";
-  return `${sign}$${Math.abs(value).toFixed(2)}`;
-}
 
 export function RecentActivity() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -67,17 +63,11 @@ export function RecentActivity() {
         </ul>
       )}
 
-      {listRequest.error && (
-        <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-          {listRequest.error}
-        </p>
-      )}
+      {listRequest.error && <ErrorText>{listRequest.error}</ErrorText>}
 
       {listRequest.hasSettled && !listRequest.loading && !listRequest.error && total === 0 && (
         <div className="flex flex-col items-start gap-3">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            No transactions yet. Upload a statement to get started.
-          </p>
+          <EmptyText>No transactions yet. Upload a statement to get started.</EmptyText>
           <Link
             href="/statements"
             className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-50 dark:text-black dark:hover:bg-zinc-200"
@@ -108,7 +98,7 @@ export function RecentActivity() {
                       : "shrink-0 text-sm font-semibold text-emerald-600 dark:text-emerald-400"
                   }
                 >
-                  {formatAmount(txn.amount)}
+                  {formatSignedCurrency(txn.amount, "USD")}
                 </span>
               </li>
             );
