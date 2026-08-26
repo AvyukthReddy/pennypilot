@@ -1,19 +1,9 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-
-import { Navbar } from "@/components/navbar";
-import { StatementsList } from "@/components/statements-list";
-import { createClient } from "@/lib/supabase/server";
+import { Navbar } from "@/components/shared/navbar";
+import { StatementsList } from "@/components/statements/statements-list";
+import { requireUser } from "@/lib/require-user";
 
 export default async function StatementsPage() {
-  const supabase = createClient(await cookies());
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
+  const { user } = await requireUser();
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">

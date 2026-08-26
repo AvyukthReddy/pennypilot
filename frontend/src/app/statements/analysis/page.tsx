@@ -1,38 +1,26 @@
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { ConfidenceView } from "@/components/confidence-view";
-import { CurrencyEditor } from "@/components/currency-editor";
-import { CurrencyProvider } from "@/components/currency-context";
-import { DocumentAnalysisSummary } from "@/components/document-analysis-summary";
-import { FinancialValidationView } from "@/components/financial-validation-view";
-import { Navbar } from "@/components/navbar";
-import { PipelineProgress } from "@/components/pipeline-progress";
-import { StatementPagesView } from "@/components/statement-pages-view";
-import { StatementViewButton } from "@/components/statement-view-button";
-import { TransactionRegionsView } from "@/components/transaction-regions-view";
-import { TransactionSchemaView } from "@/components/transaction-schema-view";
-import { TransactionVerificationView } from "@/components/transaction-verification-view";
-import { TransactionsView } from "@/components/transactions-view";
-import { createClient } from "@/lib/supabase/server";
+import { ConfidenceView } from "@/components/statements/analysis/confidence-view";
+import { CurrencyEditor } from "@/components/statements/analysis/currency-editor";
+import { CurrencyProvider } from "@/components/statements/analysis/currency-context";
+import { DocumentAnalysisSummary } from "@/components/statements/analysis/document-analysis-summary";
+import { FinancialValidationView } from "@/components/statements/analysis/financial-validation-view";
+import { Navbar } from "@/components/shared/navbar";
+import { PipelineProgress } from "@/components/statements/analysis/pipeline-progress";
+import { StatementPagesView } from "@/components/statements/analysis/statement-pages-view";
+import { StatementViewButton } from "@/components/statements/statement-view-button";
+import { TransactionRegionsView } from "@/components/statements/analysis/transaction-regions-view";
+import { TransactionSchemaView } from "@/components/statements/analysis/transaction-schema-view";
+import { TransactionVerificationView } from "@/components/statements/analysis/transaction-verification-view";
+import { TransactionsView } from "@/components/statements/analysis/transactions-view";
+import { requireUser } from "@/lib/require-user";
 
-type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
+export default async function StatementAnalysisPage(
+  props: Readonly<PageProps<"/statements/analysis">>,
+) {
+  const { user } = await requireUser();
 
-export default async function StatementAnalysisPage({
-  searchParams,
-}: {
-  searchParams: SearchParams;
-}) {
-  const supabase = createClient(await cookies());
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
-  const params = await searchParams;
+  const params = await props.searchParams;
   const statementId = typeof params.statement_id === "string" ? params.statement_id : undefined;
   const filename = typeof params.filename === "string" ? params.filename : undefined;
 

@@ -5,9 +5,10 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { transactionsEndpoints } from "@/constants/endpoints/transactions.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { useCurrency } from "@/components/currency-context";
+import { useCurrency } from "@/components/statements/analysis/currency-context";
 import { formatSignedCurrency } from "@/lib/format-currency";
-import { Skeleton } from "@/components/skeleton";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 const MAX_ROWS = 200;
 
@@ -60,19 +61,11 @@ export function TransactionsView({ statementId }: { statementId: string }) {
   }
 
   if (listRequest.error) {
-    return (
-      <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-        {listRequest.error}
-      </p>
-    );
+    return <ErrorText>{listRequest.error}</ErrorText>;
   }
 
   if (transactions.length === 0) {
-    return (
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        No transactions extracted for this statement yet.
-      </p>
-    );
+    return <EmptyText>No transactions extracted for this statement yet.</EmptyText>;
   }
 
   return (
