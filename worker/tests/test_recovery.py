@@ -16,7 +16,15 @@ class _FakeExtractionService:
         self._results_by_page = results_by_page
         self._calls = calls
 
-    def extract(self, document, region, transaction_fields, previous_attempt=None, recovery_hint=None):
+    def extract(
+        self,
+        document,
+        region,
+        transaction_fields,
+        statement_period=None,
+        previous_attempt=None,
+        recovery_hint=None,
+    ):
         self._calls.append(region.page)
         outcome = self._results_by_page.get(region.page)
         if isinstance(outcome, Exception):

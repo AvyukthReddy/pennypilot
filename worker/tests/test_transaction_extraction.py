@@ -1,5 +1,6 @@
 import io
 import json
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -222,3 +223,31 @@ def test_extract_raises_after_exhausting_attempts() -> None:
 
     with pytest.raises(TransactionExtractionError):
         service.extract(_make_document(), _make_region(), _make_fields())
+
+
+def test_extract_includes_statement_period_in_prompt_when_known() -> None:
+    provider = _FakeProvider([VALID_EXTRACTION_JSON])
+    service = TransactionExtractionService(provider=provider)
+
+    service.extract(
+        _make_document(),
+        _make_region(),
+        _make_fields(),
+        statement_period=(date(2026, 7, 1), date(2026, 7, 31)),
+    )
+
+    system_content = provider.calls[0][0]["content"]
+    assert "2026-07-01" in system_content
+    assert "2026-07-31" in system_content
+    assert "never invent or assume" in system_content
+
+
+def test_extract_does_not_fabricate_a_year_when_period_unknown() -> None:
+    provider = _FakeProvider([VALID_EXTRACTION_JSON])
+    service = TransactionExtractionService(provider=provider)
+
+    service.extract(_make_document(), _make_region(), _make_fields(), statement_period=None)
+
+    system_content = provider.calls[0][0]["content"]
+    assert "period is unknown" in system_content
+    assert "never fabricate a year" in system_content

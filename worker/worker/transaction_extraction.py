@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import date
 
 from pydantic import ValidationError
 
@@ -23,7 +24,31 @@ class TransactionExtractionError(Exception):
     within MAX_ATTEMPTS."""
 
 
-def _system_prompt(transaction_fields: TransactionFields) -> str:
+def _period_note(statement_period: tuple[date, date] | None) -> str:
+    if statement_period is None:
+        return (
+            "This document's statement period is unknown. If a date in the "
+            "source text has no year, infer it only from other dates "
+            "visible in this same region (e.g. a year printed elsewhere on "
+            "the page, or a full date on another row), never fabricate a "
+            "year that isn't grounded in the text itself.\n\n"
+        )
+    start, end = statement_period
+    return (
+        f"This statement covers {start.isoformat()} to {end.isoformat()}. "
+        "Dates in the source text often omit the year (e.g. \"Jul 5\"). "
+        "Resolve each date's year from this period, never invent or assume "
+        "a year that isn't implied by it. If the period spans a year "
+        "boundary (e.g. December into January), a date in the later "
+        "calendar month within that span belongs to the earlier year and "
+        "one in the earlier calendar month belongs to the later year.\n\n"
+    )
+
+
+def _system_prompt(
+    transaction_fields: TransactionFields,
+    statement_period: tuple[date, date] | None = None,
+) -> str:
     schema = json.dumps(TransactionExtraction.model_json_schema(), indent=2)
     fields = transaction_fields.model_dump_json(indent=2)
     return (
@@ -37,6 +62,7 @@ def _system_prompt(transaction_fields: TransactionFields) -> str:
         "amount-bearing column may carry semantics \"debit\" or \"credit\" "
         "when the table splits amount across two columns):\n\n"
         f"{fields}\n\n"
+        f"{_period_note(statement_period)}"
         "Using that mapping, extract EVERY transaction row present in the "
         "blocks below, not a sample, all of them. For a debit/credit-split "
         "amount, combine the two columns into a single signed amount per row "
@@ -80,12 +106,13 @@ class TransactionExtractionService:
         region: TransactionRegion,
         transaction_fields: TransactionFields,
         *,
+        statement_period: tuple[date, date] | None = None,
         previous_attempt: TransactionExtraction | None = None,
         verification_issues: list[VerificationIssue] | None = None,
         recovery_hint: str | None = None,
     ) -> TransactionExtraction:
         messages: list[dict] = [
-            {"role": "system", "content": _system_prompt(transaction_fields)},
+            {"role": "system", "content": _system_prompt(transaction_fields, statement_period)},
             {"role": "user", "content": _region_content(document, region)},
         ]
 

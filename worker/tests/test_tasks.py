@@ -245,6 +245,7 @@ class _FakeExtractionService:
         document,
         region,
         transaction_fields,
+        statement_period=None,
         previous_attempt=None,
         verification_issues=None,
         recovery_hint=None,
