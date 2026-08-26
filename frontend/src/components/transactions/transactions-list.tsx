@@ -5,7 +5,9 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { transactionsEndpoints } from "@/constants/endpoints/transactions.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { TransactionRowSkeleton } from "@/components/skeleton";
+import { formatSignedCurrency } from "@/lib/format-currency";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { TransactionRowSkeleton } from "@/components/shared/skeleton";
 
 const PAGE_SIZE = 50;
 const SKELETON_ROW_COUNT = 5;
@@ -27,12 +29,6 @@ type TransactionListResponse = {
   limit: number;
   offset: number;
 };
-
-function formatAmount(amount: string): string {
-  const value = Number(amount);
-  const sign = value >= 0 ? "+" : "-";
-  return `${sign}$${Math.abs(value).toFixed(2)}`;
-}
 
 export function TransactionsList({
   initialStatementId,
@@ -105,16 +101,12 @@ export function TransactionsList({
         </ul>
       )}
 
-      {listRequest.error && (
-        <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-          {listRequest.error}
-        </p>
-      )}
+      {listRequest.error && <ErrorText>{listRequest.error}</ErrorText>}
 
       {listRequest.hasSettled && !listRequest.loading && !listRequest.error && transactions.length === 0 && (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        <EmptyText>
           {statementId ? "No transactions for this statement." : "No transactions yet."}
-        </p>
+        </EmptyText>
       )}
 
       {transactions.length > 0 && (
@@ -138,7 +130,7 @@ export function TransactionsList({
                       : "shrink-0 text-sm font-semibold text-emerald-600 dark:text-emerald-400"
                   }
                 >
-                  {formatAmount(txn.amount)}
+                  {formatSignedCurrency(txn.amount, "USD")}
                 </span>
               </li>
             );

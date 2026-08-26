@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { FORM_INPUT_CLASS } from "@/constants/form.constants";
+
 import { requestPasswordReset } from "./actions";
 
 export default async function ForgotPasswordPage(props: Readonly<PageProps<"/forgot-password">>) {
@@ -28,7 +30,7 @@ export default async function ForgotPasswordPage(props: Readonly<PageProps<"/for
               type="email"
               required
               autoComplete="email"
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-black outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+              className={FORM_INPUT_CLASS}
             />
           </div>
 

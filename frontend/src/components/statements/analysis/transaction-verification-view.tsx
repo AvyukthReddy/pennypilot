@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { Skeleton } from "@/components/skeleton";
+import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
+import { Skeleton } from "@/components/shared/skeleton";
 
 type IssueType =
   | "missing_transaction"
@@ -66,28 +67,20 @@ export function TransactionVerificationView({ statementId }: { statementId: stri
   }
 
   if (verificationRequest.error) {
-    return (
-      <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-        {verificationRequest.error}
-      </p>
-    );
+    return <ErrorText>{verificationRequest.error}</ErrorText>;
   }
 
   if (!report || report.valid === null) {
     return (
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      <EmptyText>
         No verification has run yet. Either extraction hasn&apos;t run, or no
         transactions were extracted to check.
-      </p>
+      </EmptyText>
     );
   }
 
   if (report.valid && report.issues.length === 0) {
-    return (
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        All extracted transactions were verified, no issues found.
-      </p>
-    );
+    return <EmptyText>All extracted transactions were verified, no issues found.</EmptyText>;
   }
 
   return (

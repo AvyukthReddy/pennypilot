@@ -4,16 +4,15 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import { validatePasswordInput } from "@/lib/validate-password";
 
 export async function changePassword(formData: FormData) {
   const password = formData.get("password");
   const confirmPassword = formData.get("confirmPassword");
 
-  if (typeof password !== "string" || password.length < 6) {
-    redirect("/settings?error=Password must be at least 6 characters");
-  }
-  if (password !== confirmPassword) {
-    redirect("/settings?error=Passwords don't match");
+  const validationError = validatePasswordInput(password, confirmPassword);
+  if (validationError) {
+    redirect(`/settings?error=${validationError}`);
   }
 
   const supabase = createClient(await cookies());
@@ -25,7 +24,8 @@ export async function changePassword(formData: FormData) {
     redirect("/login");
   }
 
-  const { error } = await supabase.auth.updateUser({ password });
+  // Already validated as a non-empty string by validatePasswordInput above.
+  const { error } = await supabase.auth.updateUser({ password: password as string });
   if (error) {
     redirect(`/settings?error=${encodeURIComponent(error.message)}`);
   }

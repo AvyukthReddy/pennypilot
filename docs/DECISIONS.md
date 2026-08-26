@@ -4,6 +4,53 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-25, Frontend folder-structure refactor (feature grouping, no functional change)
+
+`frontend/src/components/` had grown to 20 flat files spanning 5 unrelated feature
+domains (landing page, dashboard, settings, statements, transactions), several
+duplications had crept in, and a few components (`statements-list.tsx` 314 lines,
+`profile-form.tsx` 280 lines, `pipeline-progress.tsx` 201 lines) mixed fetch/upload/
+polling logic with rendering in one file. This was a pure reorganization + light
+extraction pass — no behavior or UI changes, no new dependencies.
+
+**No `features/` tree.** At ~40 files, a `features/<name>/{components,hooks,api,types}`
+layout would leave most subfolders holding 0-1 files. Instead, feature grouping was
+added only inside `components/` (the one folder with an actual scale problem):
+`components/{shared,landing,dashboard,settings,statements,transactions}/`, with
+`components/statements/analysis/` nested under `statements/` to mirror the
+`/statements/analysis` route. `hooks/`, `services/`, `constants/`, `lib/` stayed flat —
+each was already small and single-purpose. `compress-image.ts`/`countries.ts` moved
+from `lib/` into `components/settings/` since each had exactly one consumer
+(`profile-form.tsx`); `lib/` now holds only genuinely cross-cutting code. No barrel/
+index files were added — the codebase had zero before, and the one plausible candidate
+(`components/statements/analysis/`, 11 files) has a single consumer whose explicit
+imports document what that page composes.
+
+Eight duplications were extracted rather than just relocated: `formatAmount`
+(byte-identical in `recent-activity.tsx`/`transactions-list.tsx`) now calls
+`lib/format-currency.ts`'s `formatSignedCurrency`; the view-in-new-tab logic shared by
+`statement-view-button.tsx` and `statements-list.tsx`'s inline copy now lives in
+`components/statements/use-signed-url-view.ts` — both call the same hook rather than
+one delegating to the other's rendered component, since `statement-view-button.tsx`
+never surfaced its fetch error and `statements-list.tsx` did, so collapsing them into
+one shared component instance would have silently dropped that error message;
+`NON_TERMINAL_STATUSES` is now `components/statements/statement-status.ts`; the
+five-page auth-gate boilerplate (`createClient` + `getUser()` + `redirect("/login")`)
+is now `lib/require-user.ts`'s `requireUser()`; the password length/match check
+duplicated in `settings/actions.ts`/`reset-password/actions.ts` is now
+`lib/validate-password.ts`'s `validatePasswordInput()` (each action kept its own
+`redirect()` target, since those differ); the loading/error/empty triptych repeated
+across ~13 components is now `components/shared/api-status-text.tsx`'s
+`ErrorText`/`EmptyText` (deliberately small leaf components, not a generic
+state-machine wrapper, since loading skeletons stayed bespoke per component); the
+repeated form-input Tailwind class is now `constants/form.constants.ts`'s
+`FORM_INPUT_CLASS`. `statements/analysis` and `transactions` pages also switched to the
+`PageProps<"/route">` convention `login`/`signup`/`settings` already used, dropping
+their hand-rolled `SearchParams` type.
+
+Verified clean after every incremental step: `npx tsc --noEmit`, `npx eslint src/`,
+`npm run build` (no test runner exists in this repo — none added).
+
 ## 2026-08-25, Live pipeline progress (GitHub-Actions-style stepper)
 
 Before this, `Statement.status` only had coarse values (`uploaded`/`queued`/`processing`/

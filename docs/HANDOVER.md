@@ -29,8 +29,8 @@ request-flow maps).
   (`avatars_owner_write`) were created directly via SQL against `storage.buckets` /
   `storage.objects` (not tracked by Alembic — that's Supabase-managed schema, see
   [DECISIONS.md](DECISIONS.md)). Frontend UI is the avatar circle + "Change photo" in
-  `frontend/src/components/profile-form.tsx`; files over 5MB are compressed client-side
-  first (`frontend/src/lib/compress-image.ts`, canvas resize + JPEG re-encode) rather
+  `frontend/src/components/settings/profile-form.tsx`; files over 5MB are compressed client-side
+  first (`frontend/src/components/settings/compress-image.ts`, canvas resize + JPEG re-encode) rather
   than rejected — the backend's 5MB check stays as a safety net for anyone hitting the
   API directly.
 - **Statement upload**: `GET/POST/DELETE /api/statements` +
@@ -41,7 +41,7 @@ request-flow maps).
   [DECISIONS.md](DECISIONS.md). Viewing a file goes through a short-lived (120s)
   Supabase signed URL (`get_statement_view_url` in `services/storage.py`) since the
   bucket is private, unlike avatars' public URL. Frontend page at
-  `frontend/src/app/statements/` (`components/statements-list.tsx`), linked from the
+  `frontend/src/app/statements/` (`components/statements/statements-list.tsx`), linked from the
   navbar. Uploads are deduplicated by SHA-256 (`Statement.file_hash`) — re-uploading
   the same file for the same user returns `409`.
 - **Statement ingestion, analysis, understanding, region detection, schema
@@ -157,31 +157,31 @@ request-flow maps).
   `transaction_schema`/`transaction_verification`/`financial_validation`/
   `confidence`/`processing_stage`+`processing_detail`
   (same ownership check as `/view`). Frontend: a
-  "Text blocks" link per statement row (`components/statements-list.tsx`,
+  "Text blocks" link per statement row (`components/statements/statements-list.tsx`,
   shown for `status === "ingested"` or `"processing"` PDFs, relabeled
   "View progress" while processing) opens `/statements/analysis`, which
-  renders, top to bottom: `components/pipeline-progress.tsx` (a
+  renders, top to bottom: `components/statements/analysis/pipeline-progress.tsx` (a
   GitHub-Actions-style step list polling `/progress` every 30s while
   non-terminal, hidden once `status === "ingested"`),
-  `components/confidence-view.tsx` (a
+  `components/statements/analysis/confidence-view.tsx` (a
   colored status pill, score percentage, warnings, and a five-component
-  breakdown, or an explanatory empty state), `components/document-analysis-summary.tsx`
+  breakdown, or an explanatory empty state), `components/statements/analysis/document-analysis-summary.tsx`
   (document type/institution/account/currency/period/beginning and ending
   balance + section list, or "Not
-  yet classified"), `components/transaction-regions-view.tsx` (page/region
-  table, or an explanatory empty state), `components/transaction-schema-view.tsx`
+  yet classified"), `components/statements/analysis/transaction-regions-view.tsx` (page/region
+  table, or an explanatory empty state), `components/statements/analysis/transaction-schema-view.tsx`
   (target-field → source-column table, or an explanatory empty state),
-  `components/transactions-view.tsx` (a date/description/amount table of
+  `components/statements/analysis/transactions-view.tsx` (a date/description/amount table of
   every persisted `TransactionRow` for the statement, via the same
   `GET /api/transactions?statement_id=...` the standalone `/transactions`
   page uses, or an explanatory empty state),
-  `components/transaction-verification-view.tsx` ("all verified", a
+  `components/statements/analysis/transaction-verification-view.tsx` ("all verified", a
   type/page/description issue table, or an explanatory empty state),
-  `components/financial-validation-view.tsx` ("all checks passed", a
+  `components/statements/analysis/financial-validation-view.tsx` ("all checks passed", a
   type/description issue table plus a balance reconciliation breakdown, plus
   a one-line recovery note when `recovery_attempts` is non-empty, or
   an explanatory empty state), then
-  `components/statement-pages-view.tsx` (each page as a collapsible section with
+  `components/statements/analysis/statement-pages-view.tsx` (each page as a collapsible section with
   a table of `text_blocks`). This is a debugging/inspection view, not part of
   the intended end-user product surface — it exists so extraction/
   classification/region/schema/verification/validation quality can be
@@ -221,35 +221,36 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: live pipeline
-  progress on `/statements/analysis`. New `Statement.processing_stage`/
-  `processing_detail` columns (both nullable, migration `cf872bc680da`)
-  are committed progressively as `worker/worker/tasks.py`'s
-  `parse_statement` runs, via a `_set_stage(session, stmt, stage,
-  detail=None)` helper called at the top of each phase's existing guard
-  (before its try/except), instead of everything landing in the one big
-  commit at the end like before. Seven stages (`ingesting`,
-  `understanding`, `detecting_regions`, `discovering_schema`,
-  `extracting`, `validating`, `scoring_confidence`) match the real control
-  flow: `extracting` covers the whole per-region extract-then-verify loop
-  (with `processing_detail` as `"Region N of M"` per iteration),
-  `validating` covers both financial validation and any recovery attempt.
-  A guard that never passes just never commits its stage, so the stepper
-  correctly "jumps forward" over stages that didn't run, an accepted v1
-  simplification since guard checks have zero I/O between them (see
-  [DECISIONS.md](DECISIONS.md)'s 2026-08-25 "Live pipeline progress"
-  entry). New `GET /api/statements/{id}/progress` returns
-  `{statement_id, status, processing_stage, processing_detail,
-  parse_error}` cheaply. New `components/pipeline-progress.tsx` polls it
-  every 30s (shared `POLL_INTERVAL_MS`, now in `constants/app.constants.ts`
-  instead of duplicated locally) while `status` is non-terminal, rendering
-  a GitHub-Actions-style step list (done/current/pending/error), hidden
-  entirely once `status === "ingested"`. `statements-list.tsx`'s "Text
-  blocks" link (relabeled "View progress" while processing) now also shows
-  during `status === "processing"`, not only `"ingested"`, so users can
-  actually reach the page mid-run. Worker: 92 tests pass, ruff clean.
-  Backend: 75 tests pass, migration applied, ruff clean. Frontend: `tsc
-  --noEmit` and `eslint src/` both clean.
+- Nothing currently in flight. Last completed unit of work: a folder-structure
+  refactor of `frontend/src/` for clean architecture — no functional/UI changes.
+  `components/` was flat (20 files mixing 5 unrelated feature domains); it's now
+  grouped as `components/{shared,landing,dashboard,settings,statements,transactions}/`,
+  with `components/statements/analysis/` for the 11 components + `currency-context.tsx`
+  behind `/statements/analysis` specifically (all paths used elsewhere in this file
+  reflect the new locations). `lib/compress-image.ts`/`lib/countries.ts` moved to
+  `components/settings/` (single consumer each); `lib/` now holds only genuinely
+  cross-cutting code plus two new helpers. Duplicated logic was extracted rather than
+  just relocated: `formatAmount` in `recent-activity.tsx`/`transactions-list.tsx` now
+  calls `lib/format-currency.ts`'s `formatSignedCurrency`; the view-in-new-tab logic
+  shared by `statement-view-button.tsx` and `statements-list.tsx`'s inline copy now
+  lives in `components/statements/use-signed-url-view.ts` (both call the same hook,
+  each keeping its own existing JSX/error display — deliberately not made to render
+  the same component instance, since `statement-view-button.tsx` never surfaced its
+  fetch error and doing so would have been a silent behavior change);
+  `NON_TERMINAL_STATUSES` (previously duplicated in `statements-list.tsx` and
+  `pipeline-progress.tsx`) now lives in `components/statements/statement-status.ts`;
+  the five-page (`dashboard`/`settings`/`statements`/`statements/analysis`/
+  `transactions`) auth-gate boilerplate is now `lib/require-user.ts`'s `requireUser()`;
+  the password length/match check duplicated in `settings/actions.ts` and
+  `reset-password/actions.ts` is now `lib/validate-password.ts`'s
+  `validatePasswordInput()` (each action keeps its own redirect target); the
+  loading/error/empty triptych repeated across ~13 components is now
+  `components/shared/api-status-text.tsx`'s `ErrorText`/`EmptyText`; the repeated
+  form-input Tailwind class is now `constants/form.constants.ts`'s `FORM_INPUT_CLASS`.
+  `statements/analysis` and `transactions` pages also adopted the
+  `PageProps<"/route">` convention the other pages already used, dropping their
+  hand-rolled `SearchParams` type. Frontend: `tsc --noEmit`, `eslint src/`, and
+  `npm run build` all clean after every step.
 - **Docker build not verified**: `docker compose config` validates, but Docker Desktop
   hasn't been running in this environment, so `docker compose build worker` has not
   actually been run. Do that before relying on the containerized stack. (The

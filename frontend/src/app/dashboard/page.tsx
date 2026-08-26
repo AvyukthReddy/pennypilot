@@ -1,23 +1,14 @@
-import { cookies } from "next/headers";
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
-import { Navbar } from "@/components/navbar";
-import { RecentActivity } from "@/components/recent-activity";
-import { createClient } from "@/lib/supabase/server";
+import { Navbar } from "@/components/shared/navbar";
+import { RecentActivity } from "@/components/dashboard/recent-activity";
+import { requireUser } from "@/lib/require-user";
 
 const QUICK_LINK_CLASSES =
   "rounded-md border-2 border-black px-4 py-2 text-sm font-medium text-black hover:bg-black hover:text-white dark:border-zinc-50 dark:text-zinc-50 dark:hover:bg-zinc-50 dark:hover:text-black";
 
 export default async function DashboardPage() {
-  const supabase = createClient(await cookies());
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
+  const { user } = await requireUser();
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">

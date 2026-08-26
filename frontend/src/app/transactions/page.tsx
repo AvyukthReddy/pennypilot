@@ -1,27 +1,11 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
+import { Navbar } from "@/components/shared/navbar";
+import { TransactionsList } from "@/components/transactions/transactions-list";
+import { requireUser } from "@/lib/require-user";
 
-import { Navbar } from "@/components/navbar";
-import { TransactionsList } from "@/components/transactions-list";
-import { createClient } from "@/lib/supabase/server";
+export default async function TransactionsPage(props: Readonly<PageProps<"/transactions">>) {
+  const { user } = await requireUser();
 
-type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
-
-export default async function TransactionsPage({
-  searchParams,
-}: {
-  searchParams: SearchParams;
-}) {
-  const supabase = createClient(await cookies());
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
-  const params = await searchParams;
+  const params = await props.searchParams;
   const statementId = typeof params.statement_id === "string" ? params.statement_id : undefined;
   const filename = typeof params.filename === "string" ? params.filename : undefined;
 

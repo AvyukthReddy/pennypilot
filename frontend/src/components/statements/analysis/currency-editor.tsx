@@ -2,7 +2,7 @@
 
 import { useState, type ChangeEvent } from "react";
 
-import { useCurrency } from "@/components/currency-context";
+import { useCurrency } from "@/components/statements/analysis/currency-context";
 import { SUPPORTED_CURRENCIES } from "@/lib/format-currency";
 
 const SOURCE_LABELS = {

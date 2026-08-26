@@ -6,11 +6,11 @@ import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
 
-export function StatementViewButton({ statementId }: { statementId: string }) {
+export function useSignedUrlView() {
   const [viewingId, setViewingId] = useState<string | null>(null);
   const viewRequest = useApiRequest<{ url: string }>();
 
-  async function handleView(id: string) {
+  async function view(id: string) {
     setViewingId(id);
     // Open the tab synchronously on click so browsers don't treat the later
     // redirect (after the signed-URL request resolves) as a blocked popup.
@@ -29,14 +29,5 @@ export function StatementViewButton({ statementId }: { statementId: string }) {
     }
   }
 
-  return (
-    <button
-      type="button"
-      onClick={() => handleView(statementId)}
-      disabled={viewingId === statementId}
-      className="text-sm font-medium text-black underline disabled:opacity-50 dark:text-zinc-50"
-    >
-      {viewingId === statementId ? "Opening…" : "View"}
-    </button>
-  );
+  return { viewingId, view, error: viewRequest.error };
 }

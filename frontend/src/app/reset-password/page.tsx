@@ -1,3 +1,5 @@
+import { FORM_INPUT_CLASS } from "@/constants/form.constants";
+
 import { updatePassword } from "./actions";
 
 export default async function ResetPasswordPage(props: Readonly<PageProps<"/reset-password">>) {
@@ -23,7 +25,7 @@ export default async function ResetPasswordPage(props: Readonly<PageProps<"/rese
               required
               minLength={6}
               autoComplete="new-password"
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-black outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+              className={FORM_INPUT_CLASS}
             />
           </div>
 
@@ -38,7 +40,7 @@ export default async function ResetPasswordPage(props: Readonly<PageProps<"/rese
               required
               minLength={6}
               autoComplete="new-password"
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-black outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+              className={FORM_INPUT_CLASS}
             />
           </div>
 

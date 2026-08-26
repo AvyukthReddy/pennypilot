@@ -1,28 +1,16 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-
-import { Navbar } from "@/components/navbar";
-import { ProfileForm } from "@/components/profile-form";
-import { createClient } from "@/lib/supabase/server";
+import { Navbar } from "@/components/shared/navbar";
+import { ProfileForm } from "@/components/settings/profile-form";
+import { FORM_INPUT_CLASS } from "@/constants/form.constants";
+import { requireUser } from "@/lib/require-user";
 
 import { changePassword } from "./actions";
 
 export default async function SettingsPage(props: Readonly<PageProps<"/settings">>) {
-  const supabase = createClient(await cookies());
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
+  const { user } = await requireUser();
 
   const searchParams = await props.searchParams;
   const error = typeof searchParams.error === "string" ? searchParams.error : undefined;
   const message = typeof searchParams.message === "string" ? searchParams.message : undefined;
-
-  const inputClass =
-    "rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-black outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
@@ -52,7 +40,7 @@ export default async function SettingsPage(props: Readonly<PageProps<"/settings"
                 required
                 minLength={6}
                 autoComplete="new-password"
-                className={inputClass}
+                className={FORM_INPUT_CLASS}
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -69,7 +57,7 @@ export default async function SettingsPage(props: Readonly<PageProps<"/settings"
                 required
                 minLength={6}
                 autoComplete="new-password"
-                className={inputClass}
+                className={FORM_INPUT_CLASS}
               />
             </div>
 
