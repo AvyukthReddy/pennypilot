@@ -4,10 +4,12 @@ import { useEffect, useRef, useState, type ChangeEvent, type SubmitEvent } from 
 
 import { APP_METHOD } from "@/constants/app.constants";
 import { settingsEndpoints } from "@/constants/endpoints/settings.endpoints";
+import { FORM_INPUT_CLASS } from "@/constants/form.constants";
 import { useApiRequest } from "@/hooks/use-api-request";
-import { compressImage } from "@/lib/compress-image";
-import { COUNTRIES } from "@/lib/countries";
-import { ProfileFormSkeleton } from "@/components/skeleton";
+import { compressImage } from "@/components/settings/compress-image";
+import { COUNTRIES } from "@/components/settings/countries";
+import { ErrorText } from "@/components/shared/api-status-text";
+import { ProfileFormSkeleton } from "@/components/shared/skeleton";
 
 const CURRENCIES = Array.from(new Set(COUNTRIES.map((c) => c.currency))).sort((a, b) =>
   a.localeCompare(b),
@@ -108,15 +110,8 @@ export function ProfileForm() {
   }
 
   if (profileRequest.error) {
-    return (
-      <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-        {profileRequest.error}
-      </p>
-    );
+    return <ErrorText>{profileRequest.error}</ErrorText>;
   }
-
-  const inputClass =
-    "rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-black outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -183,7 +178,7 @@ export function ProfileForm() {
           onChange={(e) => setProfile((prev) => ({ ...prev, username: e.target.value || null }))}
           minLength={3}
           maxLength={50}
-          className={inputClass}
+          className={FORM_INPUT_CLASS}
         />
       </div>
 
@@ -199,7 +194,7 @@ export function ProfileForm() {
               setProfile((prev) => ({ ...prev, first_name: e.target.value || null }))
             }
             maxLength={100}
-            className={inputClass}
+            className={FORM_INPUT_CLASS}
           />
         </div>
 
@@ -212,7 +207,7 @@ export function ProfileForm() {
             value={profile.last_name ?? ""}
             onChange={(e) => setProfile((prev) => ({ ...prev, last_name: e.target.value || null }))}
             maxLength={100}
-            className={inputClass}
+            className={FORM_INPUT_CLASS}
           />
         </div>
       </div>
@@ -226,7 +221,7 @@ export function ProfileForm() {
             id="country"
             value={profile.country ?? ""}
             onChange={(e) => handleCountryChange(e.target.value)}
-            className={inputClass}
+            className={FORM_INPUT_CLASS}
           >
             <option value="">Select a country</option>
             {COUNTRIES.map((c) => (
@@ -245,7 +240,7 @@ export function ProfileForm() {
             id="currency"
             value={profile.currency ?? ""}
             onChange={(e) => setProfile((prev) => ({ ...prev, currency: e.target.value || null }))}
-            className={inputClass}
+            className={FORM_INPUT_CLASS}
           >
             <option value="">Select a currency</option>
             {CURRENCIES.map((currency) => (
@@ -257,11 +252,7 @@ export function ProfileForm() {
         </div>
       </div>
 
-      {saveRequest.error && (
-        <p className="text-sm text-red-600 dark:text-red-400" aria-live="polite">
-          {saveRequest.error}
-        </p>
-      )}
+      {saveRequest.error && <ErrorText>{saveRequest.error}</ErrorText>}
       {saved && !saveRequest.error && (
         <p className="text-sm text-emerald-600 dark:text-emerald-400" aria-live="polite">
           Profile updated
