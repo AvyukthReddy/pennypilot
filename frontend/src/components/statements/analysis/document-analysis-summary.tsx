@@ -6,7 +6,10 @@ import { APP_METHOD } from "@/constants/app.constants";
 import { statementsEndpoints } from "@/constants/endpoints/statements.endpoints";
 import { useApiRequest } from "@/hooks/use-api-request";
 import { useCurrency } from "@/components/statements/analysis/currency-context";
+import { InstitutionEditor } from "@/components/statements/analysis/institution-editor";
+import { AccountTypeTagsEditor } from "@/components/statements/analysis/account-type-tags-editor";
 import { formatCurrency } from "@/lib/format-currency";
+import { DOCUMENT_TYPE_LABELS, type DocumentType } from "@/constants/document-analysis.constants";
 import { ErrorText, EmptyText } from "@/components/shared/api-status-text";
 import { Skeleton } from "@/components/shared/skeleton";
 
@@ -16,7 +19,7 @@ type DocumentSection = {
 };
 
 type DocumentAnalysis = {
-  document_type: "bank_statement" | "credit_card_statement" | "unknown";
+  document_type: DocumentType;
   institution: string | null;
   account_type: string | null;
   account_last4: string | null;
@@ -31,12 +34,6 @@ type DocumentAnalysis = {
 type StatementAnalysisResponse = {
   statement_id: string;
   document_analysis: DocumentAnalysis | null;
-};
-
-const DOCUMENT_TYPE_LABELS: Record<DocumentAnalysis["document_type"], string> = {
-  bank_statement: "Bank statement",
-  credit_card_statement: "Credit card statement",
-  unknown: "Unknown document",
 };
 
 const SECTION_TYPE_LABELS: Record<string, string> = {
@@ -129,18 +126,16 @@ export function DocumentAnalysisSummary({ statementId }: { statementId: string }
       </span>
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-        {analysis.institution && (
-          <>
-            <dt className="text-zinc-500 dark:text-zinc-400">Institution</dt>
-            <dd className="text-black dark:text-zinc-50">{analysis.institution}</dd>
-          </>
-        )}
-        {analysis.account_type && (
-          <>
-            <dt className="text-zinc-500 dark:text-zinc-400">Account type</dt>
-            <dd className="text-black dark:text-zinc-50">{analysis.account_type}</dd>
-          </>
-        )}
+        <dt className="text-zinc-500 dark:text-zinc-400">Institution</dt>
+        <dd className="text-black dark:text-zinc-50">
+          <InstitutionEditor statementId={statementId} />
+        </dd>
+
+        <dt className="text-zinc-500 dark:text-zinc-400">Account type</dt>
+        <dd className="text-black dark:text-zinc-50">
+          <AccountTypeTagsEditor statementId={statementId} />
+        </dd>
+
         {analysis.account_last4 && (
           <>
             <dt className="text-zinc-500 dark:text-zinc-400">Account</dt>

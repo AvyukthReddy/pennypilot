@@ -42,4 +42,14 @@ class Statement(Base):
     # document_analysis's AI-detected currency when set. Null means "use the
     # detected value" (or the app-wide USD fallback if nothing was detected).
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    # User-set override for the statement's institution, shown in place of
+    # document_analysis's AI-detected institution when set. Null means "use
+    # the detected value" (or nothing, if nothing was detected either).
+    institution: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # User-set override for the statement's account-type tags (e.g.
+    # ["checking", "savings"]), shown in place of the tags normalized from
+    # document_analysis's AI-detected account_type when set. None means "use
+    # the detected/normalized value"; an explicit [] means the user cleared
+    # every tag and detection should NOT be used as a fallback.
+    account_type_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
