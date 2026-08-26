@@ -427,6 +427,46 @@ statements/analysis/transaction-regions-view.tsx`, `components/statements/analys
    returning whichever it picked as `source`; `PATCH` with `{ currency: null
    }` clears the override.
 
+## Transactions list (standalone page)
+
+1. `frontend/src/app/transactions/page.tsx` (same `requireUser()` auth-gate pattern as
+   the other pages) reads `statement_id`/`filename` off the query string (set when
+   navigating here from the statements list with a specific statement in mind) and
+   renders `components/transactions/transactions-list.tsx` with those as
+   `initialStatementId`/`initialFilename`.
+2. `transactions-list.tsx` holds filter/sort/page state (`statementId`, `documentNames`
+   — an array, not a single string — `type`, `startDate`, `endDate`, `sortBy`,
+   `sortOrder`, `page`). `documentNames` is set by
+   `components/transactions/document-name-filter.tsx`, a multi-select combobox that
+   fetches the caller's statements via `GET /api/statements` (already returns
+   `filename`), dedupes/sorts them, and lets the user type to narrow a dropdown of
+   not-yet-picked filenames — clicking one adds it as a removable chip (multiple can be
+   selected before closing the dropdown) and resets `page` to 1; typing alone never
+   applies a filter. On any filter/sort change, `transactions-list.tsx` calls
+   `transactionsEndpoints.list(...)` (`constants/endpoints/transactions.endpoints.ts`)
+   via `use-api-request.ts` to `GET /api/transactions` with the matching query params
+   (`statement_id`/`document_name`/`type`/`start_date`/`end_date`/`sort_by`/
+   `sort_order`/`page`/`page_size`). Changing any filter or the sort resets `page` to 1.
+3. `backend/app/api/transactions.py`'s `list_transactions` builds a `Transaction`
+   query scoped to the caller (`user_id`), adds `statement_id`/`type`
+   (`amount > 0`/`amount < 0` for credit/debit)/`start_date`/`end_date` as `.where()`
+   clauses, joins `Statement` only when `document_name` is set (`Statement.filename.
+   in_(document_name)` — `document_name` is a repeatable query param, exact match
+   against one or more filenames, not substring), orders by the requested
+   `sort_by`/`sort_order` (with a
+   `created_at desc` tiebreak), and paginates via `page`/`page_size` (`LIMIT`/
+   `OFFSET` computed from them). Returns `TransactionListRead` — `items`, `total`,
+   `page`, `page_size`, `total_pages` (`backend/app/schemas/transaction.py`).
+4. The list renders as rows (date/description/signed amount) with Previous/Next
+   buttons and a "Page X of Y" label driven by `total_pages`/`total` — no
+   accumulate-in-place "load more" behavior. See `docs/DECISIONS.md`'s 2026-08-26
+   entry for why page-based pagination was chosen over offset-based.
+5. The same `transactionsEndpoints.list` is also called by
+   `components/dashboard/recent-activity.tsx` (`page: 1, pageSize: 5`, no filters —
+   just the 5 most recent) and `components/statements/analysis/transactions-view.tsx`
+   (`page: 1, pageSize: 200`, scoped to one `statementId`) — see "Viewing confidence…"
+   above for the latter.
+
 ## Not yet wired
 
 - Transaction categorization (AI/merchant-based) and a full transaction-editing UI.

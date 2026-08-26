@@ -31,7 +31,7 @@ export function RecentActivity() {
 
   useEffect(() => {
     listRequest
-      .run(transactionsEndpoints.list({ limit: RECENT_LIMIT }), APP_METHOD.GET)
+      .run(transactionsEndpoints.list({ page: 1, pageSize: RECENT_LIMIT }), APP_METHOD.GET)
       .then((data) => {
         if (!data) return;
         setTransactions(data.items);
