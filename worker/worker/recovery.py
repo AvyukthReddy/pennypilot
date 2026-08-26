@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 from typing import Callable
 
 from worker.document import Document
@@ -21,6 +22,7 @@ def attempt_recovery(
     financial_validation: FinancialValidation,
     validate: Callable[[dict[int, TransactionExtraction]], FinancialValidation],
     extraction_service: TransactionExtractionService | None = None,
+    statement_period: tuple[date, date] | None = None,
 ) -> tuple[dict[int, TransactionExtraction], FinancialValidation]:
     """When `financial_validation` failed with a balance_mismatch, tries
     re-extracting one region at a time (suspect regions, no successful
@@ -58,6 +60,7 @@ def attempt_recovery(
                 document,
                 regions_by_page[page],
                 transaction_fields,
+                statement_period=statement_period,
                 previous_attempt=extraction_by_page.get(page),
                 recovery_hint=mismatch.description,
             )

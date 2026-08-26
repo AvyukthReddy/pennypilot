@@ -206,6 +206,13 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
         extraction_by_page: dict[int, TransactionExtraction] = {}
         verification_by_page: dict[int, TransactionVerification] = {}
         verification_reports: list[TransactionVerification] = []
+        statement_period = (
+            (document_analysis.statement_start, document_analysis.statement_end)
+            if document_analysis
+            and document_analysis.statement_start
+            and document_analysis.statement_end
+            else None
+        )
         if transaction_schema and transaction_regions:
             regions = transaction_regions.transaction_regions
             _set_stage(session, stmt, "extracting")
@@ -215,7 +222,10 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                 )
                 try:
                     extraction = TransactionExtractionService().extract(
-                        document, region, transaction_schema.transaction_fields
+                        document,
+                        region,
+                        transaction_schema.transaction_fields,
+                        statement_period=statement_period,
                     )
                 except Exception:
                     logger.warning(
@@ -255,6 +265,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                                 document,
                                 region,
                                 transaction_schema.transaction_fields,
+                                statement_period=statement_period,
                                 previous_attempt=extraction,
                                 verification_issues=verification.issues,
                             )
@@ -327,6 +338,7 @@ def parse_statement(statement_id: str, signed_url: str) -> None:
                         document_analysis, _rows_from_extractions(candidate)
                     ),
                     extraction_service=TransactionExtractionService(),
+                    statement_period=statement_period,
                 )
                 extracted_rows = _rows_from_extractions(extraction_by_page)
             except Exception:
