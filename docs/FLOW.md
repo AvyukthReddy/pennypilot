@@ -30,6 +30,36 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `backend/app/core/db.py`.
 5. CORS is configured in `backend/app/main.py` to allow the frontend origin.
 
+## Category management (settings page)
+
+1. `frontend/src/app/settings/page.tsx` renders `components/settings/categories-manager.tsx`
+   in its own "Categories" section, between Profile and Password.
+2. On mount, `categories-manager.tsx` calls `GET /api/categories`
+   (`categoriesEndpoints.list()` in `constants/endpoints/categories.endpoints.ts`) via
+   `use-api-request.ts`, same JWT/CORS path as every other API call.
+3. `backend/app/api/categories.py`'s `list_categories` loads all of the caller's rows
+   from the `categories` table (`backend/app/models/category.py`) scoped by
+   `user_id`; if that's empty (brand-new user), `_seed_defaults` inserts the
+   canonical starter set from `backend/app/services/default_categories.py`
+   (`DEFAULT_CATEGORIES`) before returning. `_to_tree` groups rows by `parent_id`
+   and orders siblings by `sort_order`, returning a nested `list[CategoryRead]` —
+   top-level categories each carrying their `subcategories` array.
+4. Every mutation (`POST /api/categories` to create,
+   `PATCH /api/categories/{id}` to rename, `DELETE /api/categories/{id}`,
+   `PATCH /api/categories/reorder` to swap `sort_order` within one parent) is
+   followed by `categories-manager.tsx` re-fetching the whole tree via step 2/3
+   rather than trying to merge the mutation's own response into local state — the
+   nested shape only exists on top-level rows, so a full refetch avoids partial/
+   inconsistent local state after a rename or reorder.
+5. `create_category`/`update_category` reject duplicate names (case-insensitive,
+   scoped to the same `user_id`+`parent_id`) and reject creating a subcategory whose
+   parent already has a `parent_id` set (only two levels are supported) — both
+   checked in the route handler itself, not via DB constraints (see
+   `docs/DECISIONS.md`'s 2026-08-28 entry for why).
+6. Transaction rows do not reference `categories` yet — nothing outside this settings
+   section reads from this table. See `docs/HANDOVER.md`'s "Next up" for the planned
+   follow-up (category assignment/filtering on `/transactions`).
+
 ## Profile image upload (settings page)
 
 1. `components/settings/profile-form.tsx`'s avatar button opens a hidden file input; on change,
@@ -522,7 +552,11 @@ statements/analysis/transaction-regions-view.tsx`, `components/statements/analys
 
 ## Not yet wired
 
-- Transaction categorization (AI/merchant-based) and a full transaction-editing UI.
+- Assigning a category to a transaction, and a category filter on `/transactions`
+  (the `categories` table and its management UI exist, see "Category management"
+  above, but nothing on `Transaction` references it yet). AI/merchant-based
+  auto-categorization and a full transaction-editing UI more broadly are separate,
+  also-unbuilt follow-ups.
 - No dedup/idempotency guard on statement reprocessing: re-running
   `worker.parse_statement` on an already-`"ingested"` statement inserts a
   second set of `transactions` rows rather than replacing the first — the

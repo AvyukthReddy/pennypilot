@@ -4,6 +4,76 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-08-28, Category system (taxonomy only)
+
+Built the category data model, CRUD API, and a management UI, scoped to just the
+taxonomy itself — default categories, subcategories, and user-created categories.
+Transaction-level assignment/filtering and AI/merchant-based auto-categorization
+(already flagged as a future item in docs/HANDOVER.md) are deliberately out of scope
+for this pass; see docs/bugs-features/2026-08-28-category-system.md for the full
+trace.
+
+**Real `categories` table, not an override column.** The most recent, most similar
+prior feature — customizable institution/account-type tags on `Statement`
+(`backend/app/services/statement_fields.py`) — uses a nullable override column plus
+an override/detected/default resolver. That doesn't fit here: those are unbounded,
+per-statement free-text tags with no shared identity, whereas a category needs to be
+the *same* row everywhere it's referenced (renaming "Groceries" once should rename it
+everywhere), and needs its own hierarchy and lifecycle (create, rename, delete,
+reorder). So this got a real `categories` table
+(`backend/app/models/category.py`, migration `25d591fb73a0`) instead.
+
+**No color/icon field.** The project's established flat black/white design
+preference (see docs/HANDOVER.md and the UI conventions already in place) treats
+color as semantic, not decorative — a rainbow-per-category palette would read as
+decoration. Categories are name + hierarchy only for now; a visual treatment can be
+added later without a schema change if a real need shows up (e.g. once categories
+appear on transaction rows).
+
+**Per-user rows, lazily seeded, not a shared-defaults table with an override
+layer.** Considered a global `is_default=true` row set shared across all users (mirroring
+the override pattern's "detected" tier) with per-user overrides layered on top. Chose
+instead to give every user their own full set of rows, seeded from a canonical
+`DEFAULT_CATEGORIES` constant (`backend/app/services/default_categories.py`) the
+first time they call `GET /api/categories` and have zero categories. This makes
+every row — default or user-created — an ordinary, fully editable/renamable/
+deletable row with no separate override bookkeeping, and it backfills existing users
+for free (no data migration needed) since seeding happens lazily on first fetch.
+`Category.is_default` is kept as an informational flag only (useful for a "default"
+badge in the UI later), not an authorization or override mechanism.
+
+**No DB-level uniqueness constraint on category name.** Postgres treats `NULL`
+`parent_id` values as distinct from each other, so a unique constraint on
+`(user_id, parent_id, name)` would not actually catch two duplicate top-level
+category names for the same user (both rows have `parent_id IS NULL`, which never
+collides with itself in a unique index). Rather than special-case top-level names
+with a partial index, duplicate-name prevention (case-insensitive, scoped to the
+same user + parent) is done once in the service layer and applied uniformly to both
+levels.
+
+**Two fixed levels, enforced in the service layer.** `Category.parent_id` is
+either `NULL` (top-level) or points at a category that is itself top-level;
+`create_category` rejects creating a subcategory whose parent already has a
+`parent_id` set. Chose this over a fully recursive self-referencing tree because
+nothing asked for more than two levels, and enforcing it in code (one check) is far
+simpler than a recursive schema/UI for a need that doesn't exist yet.
+
+**Up/down reorder buttons, not drag-and-drop.** No DnD library exists anywhere in
+the repo yet. `sort_order` (a plain integer column) plus
+`PATCH /api/categories/reorder` (accepting an explicit ordered id list scoped to one
+`parent_id`) covers the need without adding a new frontend dependency for this pass.
+
+**RLS enabled on `categories`.** Per the 2026-08-18 RLS entry's standing rule ("any
+new table holding per-user data must get RLS enabled + an owner policy in the same
+migration/provisioning pass that creates it"), ran a one-off script (same "ad hoc
+SQL, not tracked by Alembic, deleted after running" convention as
+`scratch_enable_rls.py`) to `ALTER TABLE categories ENABLE ROW LEVEL SECURITY` and
+add a `categories_owner_all` policy (`FOR ALL USING/WITH CHECK (auth.uid() =
+user_id)`, mirroring `statements_owner_all` since categories also need delete).
+Confirmed via `pg_class.relrowsecurity`/`pg_policies` and a full backend test run
+(124 passed) that this doesn't affect FastAPI, which connects with an RLS-bypass
+role.
+
 ## 2026-08-26, Customizable institution & account-type tags, plus matching transaction filters
 
 `Statement.account_type` (from AI document understanding) was unconstrained free

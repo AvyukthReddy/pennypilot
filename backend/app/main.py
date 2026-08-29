@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.categories import router as categories_router
 from app.api.health import router as health_router
 from app.api.me import router as me_router
 from app.api.profile import router as profile_router
@@ -23,3 +24,4 @@ app.include_router(me_router)
 app.include_router(profile_router)
 app.include_router(statements_router)
 app.include_router(transactions_router)
+app.include_router(categories_router)

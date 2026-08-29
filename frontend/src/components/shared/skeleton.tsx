@@ -19,6 +19,22 @@ export function TransactionRowSkeleton() {
   );
 }
 
+export function CategoriesSkeleton() {
+  return (
+    <div className="flex flex-col gap-3">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+          <Skeleton className="h-4 w-32" />
+          <div className="mt-3 flex flex-col gap-2 pl-6">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-3 w-20" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ProfileFormSkeleton() {
   return (
     <div className="flex flex-col gap-4">

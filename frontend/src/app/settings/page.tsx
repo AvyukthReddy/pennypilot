@@ -1,4 +1,5 @@
 import { Navbar } from "@/components/shared/navbar";
+import { CategoriesManager } from "@/components/settings/categories-manager";
 import { ProfileForm } from "@/components/settings/profile-form";
 import { FORM_INPUT_CLASS } from "@/constants/form.constants";
 import { requireUser } from "@/lib/require-user";
@@ -24,6 +25,11 @@ export default async function SettingsPage(props: Readonly<PageProps<"/settings"
         <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
           <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">Profile</h2>
           <ProfileForm />
+        </section>
+
+        <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">
+          <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">Categories</h2>
+          <CategoriesManager />
         </section>
 
         <section className="rounded-2xl border-2 border-black bg-white p-6 dark:border-zinc-50 dark:bg-zinc-950">

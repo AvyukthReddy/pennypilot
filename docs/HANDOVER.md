@@ -249,8 +249,30 @@ request-flow maps).
   add-tag input, every add/remove PATCHes immediately) render inside
   `document-analysis-summary.tsx`, each with "Reset to auto-detected" when overridden.
   See [DECISIONS.md](DECISIONS.md)'s 2026-08-26 entries.
-- **Postgres RLS**: `users`, `statements`, and `transactions` all have Row Level
-  Security enabled with an `auth.uid() = user_id` owner policy (`alembic_version` has
+- **Category system (taxonomy only)**: new `categories` table
+  (`backend/app/models/category.py`, migration `25d591fb73a0`) — per-user rows, two
+  fixed levels (`parent_id` nullable self-FK, top-level or one level of
+  subcategories), `sort_order` int, `is_default` bool (informational only). A brand
+  new user's categories are lazily seeded from `DEFAULT_CATEGORIES`
+  (`backend/app/services/default_categories.py`) the first time
+  `GET /api/categories` finds them with zero rows — seeded rows are ordinary,
+  fully editable/renamable/deletable afterward, no override bookkeeping.
+  `backend/app/api/categories.py` exposes `GET/POST /api/categories`,
+  `PATCH /api/categories/reorder`, `PATCH/DELETE /api/categories/{id}`; duplicate
+  names (case-insensitive, scoped to user+parent) and subcategory-of-a-subcategory
+  are rejected in the service layer, not via DB constraints (see
+  [DECISIONS.md](DECISIONS.md)'s 2026-08-28 entry for why). Frontend:
+  `components/settings/categories-manager.tsx` (new "Categories" section in
+  `/settings`, between Profile and Password) — nested list, inline rename, delete,
+  add category/add subcategory, up/down reorder buttons (no DnD library in the repo).
+  No color/icon field, matching the flat black/white design convention. RLS enabled
+  on `categories` with a `categories_owner_all` owner policy (ad hoc SQL, run once
+  and not tracked by Alembic, same as the other tables' policies below). Transaction
+  assignment/filtering and AI auto-categorization are explicitly **not** built yet —
+  see "Next up" below.
+- **Postgres RLS**: `users`, `statements`, `transactions`, and `categories` all have
+  Row Level Security enabled with an `auth.uid() = user_id` owner policy
+  (`alembic_version` has
   RLS on with no policy, fully locking it out of the API). This closes a real gap
   Supabase's Security Advisor flagged — without it, the public
   `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` could read/write any user's rows directly via
@@ -260,15 +282,20 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: customizable
-  institution/account-type tags plus the three new transactions filters built on top
-  of them (see "Where things stand" above). Not yet manually verified in a browser —
-  the Chrome automation tool was unresponsive for most of this session (it worked
-  briefly, then got stuck again — "Frame with ID 0 is showing error page" on every
-  page, not specific to this app); `tsc --noEmit`, `eslint src/`, `npm run build`, and
-  the full backend pytest suite (110 passed) are all clean, but click through
-  `/statements/analysis` (institution/tag editing) and `/transactions` (the four new
-  filter comboboxes) for real before calling this done.
+- Nothing currently in flight. Last completed unit of work: the category system
+  (taxonomy only — see "Where things stand" above and
+  docs/bugs-features/2026-08-28-category-system.md). Not yet manually verified in a
+  browser — the Claude Chrome extension was not connected this session
+  (`tabs_context_mcp` returned "Browser extension is not connected"); `tsc --noEmit`,
+  `eslint`, and the full backend pytest suite (124 passed) are all clean, and the
+  migration + RLS policy were confirmed applied directly against the DB, but click
+  through `/settings`'s new Categories section (default seeding, create/rename/
+  reorder/delete for both levels) for real before calling this done.
+- Before that: customizable institution/account-type tags plus the three
+  transactions filters built on top of them (see "Where things stand" above) — also
+  still not confirmed by a real browser click-through as of this writing (the Chrome
+  automation tool was unresponsive that session too); revisit both this and the
+  category system together next time a browser session is available.
 - Before that: transactions list filters/sort/pagination (document name, type, date
   range, sort, page-based pagination replacing "Load more") — see the "Transactions
   list" bullet above, since that feature was superseded/extended by this session's
@@ -374,15 +401,21 @@ request-flow maps).
   all skipped for these too. Also
   not yet scoped (which OCR engine/vision API, whether it produces the same
   `Page`/`text_blocks` shape or something else).
-- Manually verify institution/account-type-tag editing and the four transactions
-  filters in a real browser (see "In progress" above).
-- Transaction categorization (AI/merchant-based) and a full transaction-editing
-  UI (the list view now has filters/sort/pagination and statement-level institution/
-  account-type tags are editable, but individual transaction rows still aren't
-  editable and have no category of their own). The `transactions` table now actually
-  gets populated, checked, self-corrected, and scored for confidence
-  (Phase 6+7+8+9+10), so this is the natural next
-  consumer-facing feature.
+- Manually verify institution/account-type-tag editing, the four transactions
+  filters, and the new Categories section in `/settings` in a real browser (see
+  "In progress" above).
+- Assigning a category to individual transactions, and a category filter/badge in
+  the transactions list. The category taxonomy itself now exists (see "Where things
+  stand" below) but `Transaction` has no `category_id` yet and nothing in the
+  transactions list reads or filters by category — this pass was deliberately scoped
+  to the taxonomy only. A full transaction-editing UI more broadly (the list view now
+  has filters/sort/pagination and statement-level institution/account-type tags are
+  editable, but individual transaction rows still aren't editable) is the natural
+  next consumer-facing feature once this lands.
+- AI/merchant-based auto-categorization of transactions — a separate design question
+  from manual category assignment above (worker pipeline phase vs. a lighter
+  heuristic), deliberately deferred when the category system was scoped
+  (2026-08-28).
 - Dedup/idempotency guard on statement reprocessing — see "Known broken" above.
 - Surfacing `financial_validation`/`transaction_verification`/`confidence`
   somewhere a real user would see them (not just the debug
