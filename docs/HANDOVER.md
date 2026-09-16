@@ -270,6 +270,21 @@ request-flow maps).
   and not tracked by Alembic, same as the other tables' policies below). Transaction
   assignment/filtering and AI auto-categorization are explicitly **not** built yet —
   see "Next up" below.
+- **Merchant normalization (data model + function only)**: new `merchants`/
+  `merchant_aliases` tables (`backend/app/models/merchant.py`, migration
+  `d26cc8a6715d`), global/shared, not per-user like `categories` (no `user_id`, no
+  RLS; see [DECISIONS.md](DECISIONS.md)'s 2026-09-16 entry for why).
+  `resolve_merchant()` (`backend/app/services/merchant_normalization.py`) turns a raw
+  bank description into a canonical `Merchant` row via a three-tier resolution:
+  deterministic regex cleanup (`normalize_merchant_key`) → exact `merchant_aliases`
+  match → a small hand-seeded brand dictionary
+  (`backend/app/services/default_merchant_aliases.py`) → get-or-create (self-learning:
+  unmatched descriptions create a new `Merchant`/`MerchantAlias` row). A thin
+  `POST /api/merchants/normalize` endpoint (`backend/app/api/merchants.py`) exists for
+  manual verification only. **Not wired into anything yet**: statement ingestion
+  (`worker/`) doesn't call it, `transactions.merchant_id` doesn't exist, and there's
+  no category auto-assignment from a merchant's (currently unused)
+  `default_category_id`/`default_subcategory_id`; see "Next up" below.
 - **Postgres RLS**: `users`, `statements`, `transactions`, and `categories` all have
   Row Level Security enabled with an `auth.uid() = user_id` owner policy
   (`alembic_version` has
@@ -282,12 +297,17 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: the category system
-  (taxonomy only — see "Where things stand" above and
+- Nothing currently in flight. Last completed unit of work: merchant normalization
+  (data model + normalization function only, see "Where things stand" above and
+  docs/bugs-features/2026-09-16-merchant-normalization.md). No frontend surface to
+  verify in a browser (backend-only this pass); `pytest -q` (133 passed) and
+  `ruff check` are clean, and the migration was confirmed applied directly against
+  the dev DB (`alembic upgrade head` / `alembic current`).
+- Before that: the category system (taxonomy only, see
   docs/bugs-features/2026-08-28-category-system.md). Not yet manually verified in a
-  browser — the Claude Chrome extension was not connected this session
+  browser: the Claude Chrome extension was not connected that session
   (`tabs_context_mcp` returned "Browser extension is not connected"); `tsc --noEmit`,
-  `eslint`, and the full backend pytest suite (124 passed) are all clean, and the
+  `eslint`, and the full backend pytest suite (124 passed) were all clean, and the
   migration + RLS policy were confirmed applied directly against the DB, but click
   through `/settings`'s new Categories section (default seeding, create/rename/
   reorder/delete for both levels) for real before calling this done.
@@ -412,10 +432,17 @@ request-flow maps).
   has filters/sort/pagination and statement-level institution/account-type tags are
   editable, but individual transaction rows still aren't editable) is the natural
   next consumer-facing feature once this lands.
-- AI/merchant-based auto-categorization of transactions — a separate design question
-  from manual category assignment above (worker pipeline phase vs. a lighter
-  heuristic), deliberately deferred when the category system was scoped
-  (2026-08-28).
+- Wiring merchant normalization (see "Where things stand" above) into the actual
+  ingestion/read path: calling `resolve_merchant()` from the worker at ingestion time
+  or resolving it on read (same open question `docs/DECISIONS.md`'s 2026-09-16 entry
+  leaves unresolved), and adding a `transactions.merchant_id` column so transactions
+  can actually reference a merchant.
+- AI/merchant-based auto-categorization of transactions. Now that `merchants` exist
+  with (currently unused) `default_category_id`/`default_subcategory_id` columns, this
+  needs a resolution for the global-merchant-vs-per-user-category tension flagged in
+  `docs/DECISIONS.md`'s 2026-09-16 entry before it can be built. A separate design
+  question from manual category assignment above (worker pipeline phase vs. a lighter
+  heuristic), originally deferred when the category system was scoped (2026-08-28).
 - Dedup/idempotency guard on statement reprocessing — see "Known broken" above.
 - Surfacing `financial_validation`/`transaction_verification`/`confidence`
   somewhere a real user would see them (not just the debug

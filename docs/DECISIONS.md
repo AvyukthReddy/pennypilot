@@ -4,6 +4,44 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-09-16, Merchant normalization (data model + normalization function only)
+
+Built the `merchants`/`merchant_aliases` data model and a `resolve_merchant()`
+normalization function that turns ugly bank transaction descriptions (e.g.
+`STARBUCKS #18273 AUSTIN TX`, `SQ *STARBUCKS`) into a canonical merchant name
+(`Starbucks`). Scoped to just this, same pattern as the category system's first pass:
+not wired into statement ingestion, no `transactions.merchant_id` column, no category
+auto-assignment. See docs/bugs-features/2026-09-16-merchant-normalization.md for the
+full trace.
+
+**Global/shared tables, not per-user (unlike `categories`).** A merchant identity like
+"Starbucks" is the same real-world entity for every user, so `merchants` and
+`merchant_aliases` have no `user_id` column and no RLS owner policy. The standing
+2026-08-18 rule ("any new table holding per-user data must get RLS") doesn't apply
+here because this isn't per-user data. One canonical `Merchant(name="Starbucks")` row
+is shared and reused across every user's transactions.
+
+**`default_category_id`/`default_subcategory_id` are unused this pass.** Added as
+nullable FKs to `categories.id` (`ondelete="SET NULL"`) per the literal schema
+request, but categories are per-user rows with no global/shared category concept, and
+a global `Merchant` row can't cleanly point at one specific user's category. Both
+columns stay NULL until whichever later step implements default-categorization
+resolves that tension (e.g. matching by category name per-user instead of by id, or
+some other scheme). Flagging this now so it isn't mistaken for an oversight later.
+
+**Three-tier resolution, self-learning.** `resolve_merchant()` in
+`backend/app/services/merchant_normalization.py`: (1) a deterministic regex pass
+(`normalize_merchant_key`, same style as `statement_fields.py`'s
+`normalize_account_type_tags`) strips payment-processor prefixes, store/reference
+numbers, domain suffixes, and trailing city+state codes; (2) exact match against
+`merchant_aliases.alias`; (3) a small hand-seeded prefix dictionary
+(`default_merchant_aliases.py`, mirrors `default_categories.py`'s shape) for brands
+whose raw strings vary more than trailing noise explains (e.g. "AMZN MKTP" / "AMZN" /
+"AMAZON.COM" all meaning Amazon); (4) if nothing matches, get-or-create a new
+`Merchant` + `MerchantAlias` row so the same raw string resolves instantly next time.
+This mirrors category default-seeding's lazy-creation spirit but is triggered by
+normalization calls rather than a GET endpoint.
+
 ## 2026-08-28, Category system (taxonomy only)
 
 Built the category data model, CRUD API, and a management UI, scoped to just the

@@ -60,6 +60,23 @@ the gaps between files, so this only earns its keep if it stays accurate.
    section reads from this table. See `docs/HANDOVER.md`'s "Next up" for the planned
    follow-up (category assignment/filtering on `/transactions`).
 
+## Merchant normalization (service only, not yet wired anywhere)
+
+1. `backend/app/services/merchant_normalization.py`'s `resolve_merchant(db, raw)`
+   turns a raw bank transaction description into a canonical `Merchant` row
+   (`backend/app/models/merchant.py`), through four tiers: `normalize_merchant_key`
+   (deterministic regex cleanup: strips payment-processor prefixes, store/reference
+   numbers, domain suffixes, trailing city+state codes) → exact match against
+   `merchant_aliases.alias` → a hand-seeded prefix dictionary
+   (`backend/app/services/default_merchant_aliases.py`) → get-or-create a new
+   `Merchant`/`MerchantAlias` row if nothing matched.
+2. The only current caller is `POST /api/merchants/normalize`
+   (`backend/app/api/merchants.py`), a thin auth-gated endpoint built for manual
+   verification. No frontend calls it and no `Statement`/`Transaction` code path
+   calls `resolve_merchant` automatically; see "Not yet wired" below.
+3. `merchants`/`merchant_aliases` are global/shared tables (no `user_id`, no RLS),
+   unlike `categories`; see `docs/DECISIONS.md`'s 2026-09-16 entry.
+
 ## Profile image upload (settings page)
 
 1. `components/settings/profile-form.tsx`'s avatar button opens a hidden file input; on change,
@@ -565,3 +582,8 @@ statements/analysis/transaction-regions-view.tsx`, `components/statements/analys
   2026-08-24 "Phase 6" entry.
 - OCR/vision for scanned PDFs (`needs_ocr=true`) — still detection-only; document
   understanding is skipped for these, not just transaction parsing.
+- Merchant normalization (see "Merchant normalization" above) is not called from
+  statement ingestion or anywhere else automatically: `resolve_merchant` exists and is
+  tested, but nothing populates a merchant on a `Transaction` (no `merchant_id` column
+  exists yet), and `Merchant.default_category_id`/`default_subcategory_id` are always
+  NULL, so no auto-categorization reads them.
