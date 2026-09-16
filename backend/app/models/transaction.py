@@ -24,5 +24,13 @@ class Transaction(Base):
     description: Mapped[str] = mapped_column(String(500))
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    # Both lazily resolved/set by the category-suggestion and category-assignment
+    # endpoints in app/api/transactions.py, not at ingestion time.
+    merchant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("merchants.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("categories.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     raw_row: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

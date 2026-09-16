@@ -281,11 +281,28 @@ request-flow maps).
   (`backend/app/services/default_merchant_aliases.py`) → get-or-create (self-learning:
   unmatched descriptions create a new `Merchant`/`MerchantAlias` row). A thin
   `POST /api/merchants/normalize` endpoint (`backend/app/api/merchants.py`) exists for
-  manual verification only. **Not wired into anything yet**: statement ingestion
-  (`worker/`) doesn't call it, `transactions.merchant_id` doesn't exist, and there's
-  no category auto-assignment from a merchant's (currently unused)
-  `default_category_id`/`default_subcategory_id`; see "Next up" below.
-- **Postgres RLS**: `users`, `statements`, `transactions`, and `categories` all have
+  manual verification only. Statement ingestion (`worker/`) still doesn't call it, and
+  `Merchant`'s `default_category_id`/`default_subcategory_id` are still unused, but
+  `transactions.merchant_id` now exists and is populated lazily (see the next bullet).
+- **Merchant history (category suggestion and assignment)**: `transactions.category_id`
+  and `transactions.merchant_id` (migration `d0c1c7b5b6d3`), both nullable, both
+  resolved lazily the first time a transaction is touched by the two new endpoints
+  below rather than at ingestion. `backend/app/models/merchant_category_preference.py`
+  (`MerchantCategoryPreference`, per-user, one row per `(user_id, merchant_id)`, RLS
+  enabled with an owner policy). `backend/app/services/merchant_category_learning.py`:
+  `suggest_category()` returns the caller's own prior choice for a merchant at
+  confidence 100 (source `user_history`) if one exists, else a cross-user "global
+  consensus" pick (source `global_consensus`, confidence = percentage of other users'
+  preferences that picked it) resolved into the caller's own category tree, or `None`
+  if nobody has ever categorized that merchant; `record_preference()` upserts a user's
+  choice. `backend/app/api/transactions.py` exposes
+  `GET /api/transactions/{id}/category-suggestion` and
+  `PATCH /api/transactions/{id}/category` (the latter also calls `record_preference`
+  automatically). See [DECISIONS.md](DECISIONS.md)'s 2026-09-16 "Merchant history"
+  entry for the full design (dynamic aggregation, name+parent-name matching, last
+  write wins). No frontend surface yet, backend only.
+- **Postgres RLS**: `users`, `statements`, `transactions`, `categories`, and
+  `merchant_category_preferences` all have
   Row Level Security enabled with an `auth.uid() = user_id` owner policy
   (`alembic_version` has
   RLS on with no policy, fully locking it out of the API). This closes a real gap
@@ -297,12 +314,18 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: merchant normalization
-  (data model + normalization function only, see "Where things stand" above and
-  docs/bugs-features/2026-09-16-merchant-normalization.md). No frontend surface to
-  verify in a browser (backend-only this pass); `pytest -q` (133 passed) and
-  `ruff check` are clean, and the migration was confirmed applied directly against
-  the dev DB (`alembic upgrade head` / `alembic current`).
+- Nothing currently in flight. Last completed unit of work: merchant history
+  (category suggestion and assignment, see "Where things stand" above and
+  docs/bugs-features/2026-09-16-merchant-history.md). No frontend surface to verify
+  in a browser (backend-only this pass); `pytest -q` (151 passed) and `ruff check`
+  are clean, the migration was confirmed applied directly against the dev DB
+  (`alembic upgrade head` / `alembic current`), and RLS on
+  `merchant_category_preferences` was confirmed via `pg_class.relrowsecurity` and
+  `pg_policies`.
+- Before that: merchant normalization (data model + normalization function only,
+  see docs/bugs-features/2026-09-16-merchant-normalization.md). No frontend surface
+  to verify (backend-only pass); `pytest -q` (133 passed) and `ruff check` were
+  clean, and the migration was confirmed applied directly against the dev DB.
 - Before that: the category system (taxonomy only, see
   docs/bugs-features/2026-08-28-category-system.md). Not yet manually verified in a
   browser: the Claude Chrome extension was not connected that session
@@ -424,25 +447,25 @@ request-flow maps).
 - Manually verify institution/account-type-tag editing, the four transactions
   filters, and the new Categories section in `/settings` in a real browser (see
   "In progress" above).
-- Assigning a category to individual transactions, and a category filter/badge in
-  the transactions list. The category taxonomy itself now exists (see "Where things
-  stand" below) but `Transaction` has no `category_id` yet and nothing in the
-  transactions list reads or filters by category — this pass was deliberately scoped
-  to the taxonomy only. A full transaction-editing UI more broadly (the list view now
-  has filters/sort/pagination and statement-level institution/account-type tags are
-  editable, but individual transaction rows still aren't editable) is the natural
-  next consumer-facing feature once this lands.
-- Wiring merchant normalization (see "Where things stand" above) into the actual
-  ingestion/read path: calling `resolve_merchant()` from the worker at ingestion time
-  or resolving it on read (same open question `docs/DECISIONS.md`'s 2026-09-16 entry
-  leaves unresolved), and adding a `transactions.merchant_id` column so transactions
-  can actually reference a merchant.
-- AI/merchant-based auto-categorization of transactions. Now that `merchants` exist
-  with (currently unused) `default_category_id`/`default_subcategory_id` columns, this
-  needs a resolution for the global-merchant-vs-per-user-category tension flagged in
-  `docs/DECISIONS.md`'s 2026-09-16 entry before it can be built. A separate design
-  question from manual category assignment above (worker pipeline phase vs. a lighter
-  heuristic), originally deferred when the category system was scoped (2026-08-28).
+- A frontend surface for category assignment and suggestions: a category picker on
+  transaction rows, a "suggested: X (92%)" affordance backed by
+  `GET /api/transactions/{id}/category-suggestion`, wired to
+  `PATCH /api/transactions/{id}/category`. Both endpoints exist and are tested (see
+  "Where things stand" above) but nothing in `frontend/src/` calls either yet. A
+  category filter/badge in the transactions list is the natural companion once this
+  lands, same as the existing document/institution/account-type filters.
+- Wiring merchant normalization into the statement-ingestion path itself (calling
+  `resolve_merchant()` from the worker at ingestion time, rather than the current
+  lazy-on-first-touch resolution the two transaction endpoints do). Not needed for
+  correctness (every transaction gets a merchant the first time it's viewed or
+  categorized), but would mean `transactions.merchant_id` is already populated by
+  the time a user first opens the transactions list.
+- A genuinely learned/AI categorization layer for merchants nobody has ever
+  categorized. `merchant_category_learning.py`'s heuristic (see "Where things
+  stand" above) returns `None` when there's zero preference history anywhere for a
+  merchant; an AI-based fallback for that cold-start case remains a distinct,
+  unbuilt future item, separate from the non-AI history/consensus suggestion that
+  now exists.
 - Dedup/idempotency guard on statement reprocessing — see "Known broken" above.
 - Surfacing `financial_validation`/`transaction_verification`/`confidence`
   somewhere a real user would see them (not just the debug

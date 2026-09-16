@@ -4,6 +4,66 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-09-16, Merchant history (per-user + global-consensus category suggestion)
+
+Built real transaction-level category assignment (`transactions.category_id`, a
+`PATCH /api/transactions/{id}/category` endpoint) plus a suggestion engine: once a
+user categorizes a transaction from a merchant, later transactions from that same
+merchant suggest the same category automatically, at high confidence, without AI.
+Suggestions are user-specific (each user's own choice always wins), with a
+cross-user "global consensus" fallback when the asking user has no history of their
+own with a merchant. See docs/bugs-features/2026-09-16-merchant-history.md for the
+full trace.
+
+**Dynamic aggregation, not a stored global default. This is the resolution to the
+tension flagged in this file's own 2026-09-16 merchant-normalization entry above.**
+`Merchant.default_category_id`/`default_subcategory_id` stay exactly as Step 1 left
+them: unused, always NULL, untouched by this work. Instead, a new
+`merchant_category_preferences` table stores one row per `(user_id, merchant_id)`,
+each pointing at that user's own `categories.id` row. "Global merchant knowledge"
+is never stored: it's computed on read by loading every other user's preference
+row for a merchant and picking the most common category by name. A single static
+global default column could never work here since categories have no shared/global
+table, every category id belongs to exactly one user, so a merchant can't point at
+"the" category the way it points at "the" name.
+
+**Category matching key is (name, parent name), not name alone.** When resolving a
+winning category into the asking user's own tree, matching on name alone would let
+a top-level category collide with a differently-scoped subcategory that happens to
+share a name (e.g. a top-level "Food" versus someone's "Food" nested under
+"Restaurants"). The aggregation groups by `(category.name.lower(),
+parent.name.lower() or None)` so these stay separate vote buckets, and the
+find-or-create step that resolves the winner into the requester's tree recurses on
+the parent first, then matches/creates the child at that specific parent.
+
+**Last write wins on `MerchantCategoryPreference`, no history log.** The product
+framing ("once a user categorizes a transaction from a merchant") is about a
+user's current belief, not a timeline of past choices. `record_preference` upserts
+on `(user_id, merchant_id)` in place; re-categorizing a merchant overwrites the row
+rather than appending a new one, so a user only ever has one active preference per
+merchant.
+
+**Confidence: 100 flat for a user's own history, a computed percentage for global
+consensus.** `user_history` is always 100 since it's the user's own explicit
+choice, no ambiguity to score. `global_consensus` is
+`round(winning_votes / total_other_preference_rows_for_this_merchant * 100)`.
+
+**Aggregation is Python-side (`collections.Counter` over a plain `.where()`-loaded
+row set), not a SQL `GROUP BY`.** Preference-row counts per merchant are always
+small (bounded by the number of distinct users who've categorized it), and this
+keeps the logic testable against the repo's established `FakeSession` test
+convention, which only understands plain equality/AND clauses, not `GROUP BY` or
+`!=`. Filtering out the requesting user's own rows and comparing category names is
+done in Python for the same reason (see `categories.py`'s own duplicate-name check
+for the established precedent of Python-side, not SQL-side, comparison logic in
+this codebase).
+
+**`transactions.merchant_id` and `category_id` are lazily resolved, not populated
+at ingestion.** Same deferral as Step 1: the worker (`worker/`) is untouched.
+`_ensure_merchant` in `app/api/transactions.py` calls `resolve_merchant` the first
+time either new endpoint touches a transaction, persisting the result so later
+calls skip the normalization pass.
+
 ## 2026-09-16, Merchant normalization (data model + normalization function only)
 
 Built the `merchants`/`merchant_aliases` data model and a `resolve_merchant()`

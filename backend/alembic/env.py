@@ -7,7 +7,15 @@ from alembic import context
 
 from app.core.config import settings
 from app.core.db import Base
-from app.models import auth_user, category, merchant, statement, transaction, user  # noqa: F401  (registers models with Base.metadata)
+from app.models import (  # noqa: F401  (registers models with Base.metadata)
+    auth_user,
+    category,
+    merchant,
+    merchant_category_preference,
+    statement,
+    transaction,
+    user,
+)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

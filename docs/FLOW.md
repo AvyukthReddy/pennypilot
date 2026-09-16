@@ -60,7 +60,7 @@ the gaps between files, so this only earns its keep if it stays accurate.
    section reads from this table. See `docs/HANDOVER.md`'s "Next up" for the planned
    follow-up (category assignment/filtering on `/transactions`).
 
-## Merchant normalization (service only, not yet wired anywhere)
+## Merchant normalization (service, called manually and from transaction category endpoints)
 
 1. `backend/app/services/merchant_normalization.py`'s `resolve_merchant(db, raw)`
    turns a raw bank transaction description into a canonical `Merchant` row
@@ -70,12 +70,39 @@ the gaps between files, so this only earns its keep if it stays accurate.
    `merchant_aliases.alias` → a hand-seeded prefix dictionary
    (`backend/app/services/default_merchant_aliases.py`) → get-or-create a new
    `Merchant`/`MerchantAlias` row if nothing matched.
-2. The only current caller is `POST /api/merchants/normalize`
-   (`backend/app/api/merchants.py`), a thin auth-gated endpoint built for manual
-   verification. No frontend calls it and no `Statement`/`Transaction` code path
-   calls `resolve_merchant` automatically; see "Not yet wired" below.
+2. Callers: `POST /api/merchants/normalize` (`backend/app/api/merchants.py`), a thin
+   auth-gated endpoint built for manual verification, and `_ensure_merchant` in
+   `backend/app/api/transactions.py`, called lazily by the two category endpoints
+   below the first time a transaction is touched (see "Category suggestion and
+   assignment for transactions"). No frontend calls either path yet, and statement
+   ingestion (`worker/`) still doesn't call `resolve_merchant`; see "Not yet wired"
+   below.
 3. `merchants`/`merchant_aliases` are global/shared tables (no `user_id`, no RLS),
    unlike `categories`; see `docs/DECISIONS.md`'s 2026-09-16 entry.
+
+## Category suggestion and assignment for transactions (backend only, no frontend)
+
+1. `GET /api/transactions/{id}/category-suggestion` (`backend/app/api/transactions.py`):
+   `_get_owned_transaction` checks ownership (404 otherwise), `_ensure_merchant`
+   resolves and persists `Transaction.merchant_id` via `resolve_merchant` if it's
+   still NULL, then `suggest_category` (`backend/app/services/merchant_category_learning.py`)
+   returns a `CategorySuggestionRead` or `None` (200 either way, never 204).
+2. `suggest_category(db, user_id, merchant_id)`: the caller's own
+   `MerchantCategoryPreference` row for this merchant, if any, always wins at
+   confidence 100 (`source: user_history`). Otherwise it loads every other user's
+   preference rows for the same merchant, groups them in Python by
+   `(category name, parent category name)`, and resolves the most common one into
+   the caller's own category tree (find or create by name at the matching level),
+   with confidence set to the percentage of other users who picked it
+   (`source: global_consensus`). Returns `None` if nobody has ever categorized this
+   merchant. Full rationale in `docs/DECISIONS.md`'s 2026-09-16 "Merchant history"
+   entry.
+3. `PATCH /api/transactions/{id}/category` (payload: `{category_id}`): ownership
+   checks on both the transaction and the target category, `_ensure_merchant` as
+   above, sets `Transaction.category_id`, then calls `record_preference` to upsert
+   the caller's `MerchantCategoryPreference` row for that merchant (updates in
+   place if one exists, last write wins, never appends a second row).
+4. No frontend calls either endpoint yet; see "Not yet wired" below.
 
 ## Profile image upload (settings page)
 
@@ -569,11 +596,12 @@ statements/analysis/transaction-regions-view.tsx`, `components/statements/analys
 
 ## Not yet wired
 
-- Assigning a category to a transaction, and a category filter on `/transactions`
-  (the `categories` table and its management UI exist, see "Category management"
-  above, but nothing on `Transaction` references it yet). AI/merchant-based
-  auto-categorization and a full transaction-editing UI more broadly are separate,
-  also-unbuilt follow-ups.
+- A frontend surface for category assignment and suggestions, and a category
+  filter on `/transactions`. The backend endpoints exist and are tested (see
+  "Category suggestion and assignment for transactions" above), but nothing in
+  `frontend/src/` calls either one yet. A genuinely learned/AI categorization
+  layer for merchants nobody has ever categorized, and a full transaction-editing
+  UI more broadly, are separate, still-unbuilt follow-ups.
 - No dedup/idempotency guard on statement reprocessing: re-running
   `worker.parse_statement` on an already-`"ingested"` statement inserts a
   second set of `transactions` rows rather than replacing the first — the
@@ -583,7 +611,8 @@ statements/analysis/transaction-regions-view.tsx`, `components/statements/analys
 - OCR/vision for scanned PDFs (`needs_ocr=true`) — still detection-only; document
   understanding is skipped for these, not just transaction parsing.
 - Merchant normalization (see "Merchant normalization" above) is not called from
-  statement ingestion or anywhere else automatically: `resolve_merchant` exists and is
-  tested, but nothing populates a merchant on a `Transaction` (no `merchant_id` column
-  exists yet), and `Merchant.default_category_id`/`default_subcategory_id` are always
-  NULL, so no auto-categorization reads them.
+  statement ingestion: `resolve_merchant` runs lazily from the transaction category
+  endpoints instead, the first time a transaction is touched, not at upload time.
+  `Merchant.default_category_id`/`default_subcategory_id` are still always NULL and
+  unused; the merchant-history feature computes suggestions dynamically instead of
+  reading them (see `docs/DECISIONS.md`'s 2026-09-16 "Merchant history" entry).

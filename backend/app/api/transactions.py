@@ -3,15 +3,23 @@ import uuid
 from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import CurrentUser, get_current_user
+from app.models.category import Category
 from app.models.statement import Statement
 from app.models.transaction import Transaction
-from app.schemas.transaction import TransactionListRead
+from app.schemas.transaction import (
+    CategorySuggestionRead,
+    TransactionCategoryAssign,
+    TransactionListRead,
+    TransactionRead,
+)
+from app.services.merchant_category_learning import record_preference, suggest_category
+from app.services.merchant_normalization import resolve_merchant
 from app.services.statement_fields import resolve_account_type_tags, resolve_institution
 
 router = APIRouter()
@@ -120,3 +128,57 @@ def list_transactions(
     items = list(db.scalars(stmt))
 
     return TransactionListRead(items=items, total=total, page=page, page_size=page_size, total_pages=total_pages)
+
+
+def _get_owned_transaction(transaction_id: uuid.UUID, user: CurrentUser, db: Session) -> Transaction:
+    transaction = db.get(Transaction, transaction_id)
+    if transaction is None or transaction.user_id != uuid.UUID(user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+    return transaction
+
+
+def _ensure_merchant(db: Session, transaction: Transaction) -> uuid.UUID:
+    if transaction.merchant_id is None:
+        merchant = resolve_merchant(db, transaction.description)
+        transaction.merchant_id = merchant.id
+        db.commit()
+        db.refresh(transaction)
+    return transaction.merchant_id
+
+
+@router.get(
+    "/api/transactions/{transaction_id}/category-suggestion",
+    response_model=CategorySuggestionRead | None,
+)
+def get_category_suggestion(
+    transaction_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CategorySuggestionRead | None:
+    transaction = _get_owned_transaction(transaction_id, user, db)
+    merchant_id = _ensure_merchant(db, transaction)
+    suggestion = suggest_category(db, uuid.UUID(user.id), merchant_id)
+    return CategorySuggestionRead.model_validate(suggestion) if suggestion else None
+
+
+@router.patch("/api/transactions/{transaction_id}/category", response_model=TransactionRead)
+def assign_transaction_category(
+    transaction_id: uuid.UUID,
+    payload: TransactionCategoryAssign,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TransactionRead:
+    user_id = uuid.UUID(user.id)
+    transaction = _get_owned_transaction(transaction_id, user, db)
+
+    category = db.get(Category, payload.category_id)
+    if category is None or category.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+
+    merchant_id = _ensure_merchant(db, transaction)
+    transaction.category_id = payload.category_id
+    db.commit()
+    db.refresh(transaction)
+
+    record_preference(db, user_id, merchant_id, payload.category_id)
+    return TransactionRead.model_validate(transaction)

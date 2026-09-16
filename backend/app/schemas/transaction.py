@@ -1,6 +1,7 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -13,9 +14,23 @@ class TransactionRead(BaseModel):
     description: str
     amount: Decimal
     currency: str | None
+    merchant_id: uuid.UUID | None
+    category_id: uuid.UUID | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class CategorySuggestionRead(BaseModel):
+    category_id: uuid.UUID
+    confidence: int
+    source: Literal["user_history", "global_consensus"]
+
+    model_config = {"from_attributes": True}
+
+
+class TransactionCategoryAssign(BaseModel):
+    category_id: uuid.UUID
 
 
 class TransactionListRead(BaseModel):
