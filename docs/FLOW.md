@@ -87,16 +87,20 @@ the gaps between files, so this only earns its keep if it stays accurate.
    resolves and persists `Transaction.merchant_id` via `resolve_merchant` if it's
    still NULL, then `suggest_category` (`backend/app/services/merchant_category_learning.py`)
    returns a `CategorySuggestionRead` or `None` (200 either way, never 204).
-2. `suggest_category(db, user_id, merchant_id)`: the caller's own
-   `MerchantCategoryPreference` row for this merchant, if any, always wins at
-   confidence 100 (`source: user_history`). Otherwise it loads every other user's
-   preference rows for the same merchant, groups them in Python by
+2. `suggest_category(db, user_id, merchant_id)`, three tiers in priority order: the
+   caller's own `MerchantCategoryPreference` row for this merchant, if any, always
+   wins at confidence 100 (`source: user_history`). Otherwise it loads every other
+   user's preference rows for the same merchant, groups them in Python by
    `(category name, parent category name)`, and resolves the most common one into
    the caller's own category tree (find or create by name at the matching level),
    with confidence set to the percentage of other users who picked it
-   (`source: global_consensus`). Returns `None` if nobody has ever categorized this
-   merchant. Full rationale in `docs/DECISIONS.md`'s 2026-09-16 "Merchant history"
-   entry.
+   (`source: global_consensus`). Otherwise, if the merchant's name has a curated
+   entry in `DEFAULT_MERCHANT_CATEGORIES`
+   (`backend/app/services/default_merchant_categories.py`), that gets resolved the
+   same way at a fixed confidence of 50 (`source: seeded_default`). Returns `None`
+   if none of the three apply. Full rationale in `docs/DECISIONS.md`'s 2026-09-16
+   entries ("Merchant history" and "Seeded default category tier for merchant
+   suggestions").
 3. `PATCH /api/transactions/{id}/category` (payload: `{category_id}`): ownership
    checks on both the transaction and the target category, `_ensure_merchant` as
    above, sets `Transaction.category_id`, then calls `record_preference` to upsert

@@ -293,9 +293,12 @@ request-flow maps).
   `suggest_category()` returns the caller's own prior choice for a merchant at
   confidence 100 (source `user_history`) if one exists, else a cross-user "global
   consensus" pick (source `global_consensus`, confidence = percentage of other users'
-  preferences that picked it) resolved into the caller's own category tree, or `None`
-  if nobody has ever categorized that merchant; `record_preference()` upserts a user's
-  choice. `backend/app/api/transactions.py` exposes
+  preferences that picked it) resolved into the caller's own category tree, else a
+  curated seed default for that merchant name if one exists
+  (`backend/app/services/default_merchant_categories.py`, source `seeded_default`,
+  fixed confidence 50), else `None` if none of the three apply.
+  `record_preference()` upserts a user's choice. `backend/app/api/transactions.py`
+  exposes
   `GET /api/transactions/{id}/category-suggestion` and
   `PATCH /api/transactions/{id}/category` (the latter also calls `record_preference`
   automatically). See [DECISIONS.md](DECISIONS.md)'s 2026-09-16 "Merchant history"
@@ -314,11 +317,15 @@ request-flow maps).
 
 ## In progress
 
-- Nothing currently in flight. Last completed unit of work: merchant history
-  (category suggestion and assignment, see "Where things stand" above and
+- Nothing currently in flight. Last completed unit of work: a seeded default
+  category tier for merchant suggestions (see "Where things stand" above and
+  docs/bugs-features/2026-09-16-merchant-default-categories.md). No frontend
+  surface to verify (backend-only, no migration needed); `pytest -q` (157 passed)
+  and `ruff check` are clean.
+- Before that: merchant history (category suggestion and assignment, see
   docs/bugs-features/2026-09-16-merchant-history.md). No frontend surface to verify
   in a browser (backend-only this pass); `pytest -q` (151 passed) and `ruff check`
-  are clean, the migration was confirmed applied directly against the dev DB
+  were clean, the migration was confirmed applied directly against the dev DB
   (`alembic upgrade head` / `alembic current`), and RLS on
   `merchant_category_preferences` was confirmed via `pg_class.relrowsecurity` and
   `pg_policies`.

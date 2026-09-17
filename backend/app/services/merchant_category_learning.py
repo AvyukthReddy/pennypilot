@@ -7,14 +7,21 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.category import Category
+from app.models.merchant import Merchant
 from app.models.merchant_category_preference import MerchantCategoryPreference
+from app.services.default_merchant_categories import DEFAULT_MERCHANT_CATEGORIES
+
+# Confidence assigned to a curated seed-dictionary suggestion: lower than any real
+# usage signal (a user's own choice is 100, cross-user consensus is measured), since
+# this is an unmeasured, hand-curated guess rather than observed behavior.
+SEEDED_DEFAULT_CONFIDENCE = 50
 
 
 @dataclass
 class CategorySuggestion:
     category_id: uuid.UUID
     confidence: int
-    source: Literal["user_history", "global_consensus"]
+    source: Literal["user_history", "global_consensus", "seeded_default"]
 
 
 def _siblings(db: Session, user_id: uuid.UUID, parent_id: uuid.UUID | None) -> list[Category]:
@@ -45,15 +52,28 @@ def _find_or_create_category(db: Session, user_id: uuid.UUID, name: str, parent_
     return category
 
 
+def _seeded_suggestion(db: Session, user_id: uuid.UUID, merchant: Merchant | None) -> CategorySuggestion | None:
+    if merchant is None:
+        return None
+    entry = DEFAULT_MERCHANT_CATEGORIES.get(merchant.name)
+    if entry is None:
+        return None
+    category_name, parent_name = entry
+    resolved = _find_or_create_category(db, user_id, category_name, parent_name)
+    return CategorySuggestion(category_id=resolved.id, confidence=SEEDED_DEFAULT_CONFIDENCE, source="seeded_default")
+
+
 def suggest_category(db: Session, user_id: uuid.UUID, merchant_id: uuid.UUID) -> CategorySuggestion | None:
     """Resolves a category suggestion for a merchant, scoped to one user.
 
-    A user's own prior choice for this merchant always wins, at confidence 100.
-    Otherwise, aggregates every other user's preference for this merchant by
-    category name (ids are meaningless across users), picks the most common one,
-    and resolves it into the requesting user's own category tree. Confidence is
-    the percentage of other preference rows that picked the winning category.
-    Returns None if nobody has ever categorized this merchant.
+    Three tiers, in priority order: (1) the user's own prior choice for this
+    merchant, if any, at confidence 100. (2) Otherwise, every other user's
+    preference for this merchant, aggregated by category name (ids are meaningless
+    across users), the most common one resolved into the requesting user's own
+    category tree, confidence the percentage of other preference rows that picked
+    it. (3) Otherwise, a curated seed-dictionary default for this merchant name, if
+    one exists, at a fixed lower confidence, an unmeasured guess rather than
+    observed behavior. Returns None if none of the three apply.
     """
     merchant_prefs = list(
         db.scalars(select(MerchantCategoryPreference).where(MerchantCategoryPreference.merchant_id == merchant_id))
@@ -62,9 +82,10 @@ def suggest_category(db: Session, user_id: uuid.UUID, merchant_id: uuid.UUID) ->
     if own is not None:
         return CategorySuggestion(category_id=own.category_id, confidence=100, source="user_history")
 
+    merchant = db.get(Merchant, merchant_id)
     others = [pref for pref in merchant_prefs if pref.user_id != user_id]
     if not others:
-        return None
+        return _seeded_suggestion(db, user_id, merchant)
 
     votes: Counter[tuple[str, str | None]] = Counter()
     display: dict[tuple[str, str | None], tuple[str, str | None]] = {}
@@ -78,7 +99,7 @@ def suggest_category(db: Session, user_id: uuid.UUID, merchant_id: uuid.UUID) ->
         display.setdefault(key, (category.name, parent.name if parent else None))
 
     if not votes:
-        return None
+        return _seeded_suggestion(db, user_id, merchant)
 
     winning_key, winning_count = votes.most_common(1)[0]
     confidence = round(winning_count / len(others) * 100)

@@ -4,6 +4,36 @@ Append-only log of meaningful decisions and the reasoning behind them. Code show
 changed; this shows why. New entries go at the top. Don't edit or delete past entries
 when a decision is later reversed — add a new entry that supersedes it and link back.
 
+## 2026-09-16, Seeded default category tier for merchant suggestions
+
+Added a third, lowest-priority tier to `suggest_category()`
+(`backend/app/services/merchant_category_learning.py`): a curated baseline mapping
+(`backend/app/services/default_merchant_categories.py`, `DEFAULT_MERCHANT_CATEGORIES`)
+used only when a merchant has no cross-user consensus yet and the asking user has no
+preference of their own. Full precedence is now user's own choice (confidence 100)
+over cross-user consensus, if any exists (a computed percentage) over the curated
+seed default, if one exists for this merchant name (a fixed confidence) over no
+suggestion. See docs/bugs-features/2026-09-16-merchant-default-categories.md for the
+full trace.
+
+**Plain Python dict, not a DB table, not the unused `Merchant.default_category_id`
+columns.** Same reasoning as this file's other 2026-09-16 entries:
+`Merchant.default_category_id`/`default_subcategory_id` are single FKs to one
+specific `categories.id` row, but categories are per-user, so those columns still
+can't be the mechanism here either. `DEFAULT_MERCHANT_CATEGORIES` is keyed by
+merchant name and valued by `(category_name, subcategory_name_or_None)`, resolved
+into each user's own tree via the exact same `_find_or_create_category` the
+cross-user consensus tier already uses. This mirrors `default_categories.py` and
+`default_merchant_aliases.py`'s established shape: a small hand-curated constant
+shipped with the code, no migration, no new table.
+
+**Fixed confidence of 50, not computed.** A seed entry is an unmeasured, curated
+guess, not observed behavior, so it gets one flat, deliberately modest constant
+(`SEEDED_DEFAULT_CONFIDENCE` in `merchant_category_learning.py`) rather than a
+per-entry number. Chosen low enough that it reads as a starting suggestion, not a
+confident claim, and easy to tune later if it turns out too high or too low in
+practice.
+
 ## 2026-09-16, Merchant history (per-user + global-consensus category suggestion)
 
 Built real transaction-level category assignment (`transactions.category_id`, a

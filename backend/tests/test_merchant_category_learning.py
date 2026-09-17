@@ -3,6 +3,7 @@ import uuid
 import sqlalchemy as sa
 
 from app.models.category import Category
+from app.models.merchant import Merchant
 from app.models.merchant_category_preference import MerchantCategoryPreference
 from app.services.merchant_category_learning import record_preference, suggest_category
 
@@ -27,12 +28,17 @@ class FakeSession:
     """Same convention as test_categories.py's FakeSession, extended to cover two
     related tables (categories + merchant_category_preferences)."""
 
-    def __init__(self, categories=None, preferences=None) -> None:
+    def __init__(self, categories=None, preferences=None, merchants=None) -> None:
         self.categories: dict[uuid.UUID, Category] = {c.id: c for c in (categories or [])}
         self.preferences: dict[uuid.UUID, MerchantCategoryPreference] = {p.id: p for p in (preferences or [])}
+        self.merchants: dict[uuid.UUID, Merchant] = {m.id: m for m in (merchants or [])}
 
     def _store_for(self, model):
-        return self.categories if model is Category else self.preferences
+        if model is Category:
+            return self.categories
+        if model is Merchant:
+            return self.merchants
+        return self.preferences
 
     def get(self, model, pk):
         return self._store_for(model).get(pk)
@@ -68,6 +74,12 @@ def _make_preference(**overrides) -> MerchantCategoryPreference:
     defaults = dict(id=uuid.uuid4(), user_id=USER_A, merchant_id=MERCHANT_ID, category_id=uuid.uuid4())
     defaults.update(overrides)
     return MerchantCategoryPreference(**defaults)
+
+
+def _make_merchant(**overrides) -> Merchant:
+    defaults = dict(id=MERCHANT_ID, name="Amazon", default_category_id=None, default_subcategory_id=None)
+    defaults.update(overrides)
+    return Merchant(**defaults)
 
 
 def test_suggest_category_returns_none_when_no_preferences_exist() -> None:
@@ -166,3 +178,59 @@ def test_record_preference_updates_existing_row_in_place() -> None:
     assert pref.id == existing.id
     assert pref.category_id == new_category_id
     assert len(session.preferences) == 1
+
+
+def test_suggest_category_returns_seeded_default_when_no_preferences_anywhere() -> None:
+    merchant = _make_merchant(name="Amazon")
+    session = FakeSession(merchants=[merchant])
+
+    suggestion = suggest_category(session, USER_A, MERCHANT_ID)
+    assert suggestion.confidence == 50
+    assert suggestion.source == "seeded_default"
+
+    resolved = session.categories[suggestion.category_id]
+    assert resolved.user_id == USER_A
+    assert resolved.name == "Shopping"
+    assert resolved.parent_id is None
+
+
+def test_suggest_category_seeded_default_reuses_existing_category() -> None:
+    merchant = _make_merchant(name="Amazon")
+    shopping = _make_category(user_id=USER_A, name="Shopping")
+    session = FakeSession(categories=[shopping], merchants=[merchant])
+
+    suggestion = suggest_category(session, USER_A, MERCHANT_ID)
+    assert suggestion.category_id == shopping.id
+    assert len(session.categories) == 1
+
+
+def test_suggest_category_global_consensus_beats_seeded_default() -> None:
+    merchant = _make_merchant(name="Amazon")
+    b_business = _make_category(user_id=USER_B, name="Business")
+    pref = _make_preference(user_id=USER_B, category_id=b_business.id)
+    session = FakeSession([b_business], [pref], [merchant])
+
+    suggestion = suggest_category(session, USER_A, MERCHANT_ID)
+    assert suggestion.source == "global_consensus"
+    assert suggestion.confidence == 100
+
+    resolved = session.categories[suggestion.category_id]
+    assert resolved.name == "Business"
+
+
+def test_suggest_category_user_history_beats_seeded_default() -> None:
+    merchant = _make_merchant(name="Amazon")
+    business = _make_category(user_id=USER_A, name="Business")
+    pref = _make_preference(user_id=USER_A, category_id=business.id)
+    session = FakeSession([business], [pref], [merchant])
+
+    suggestion = suggest_category(session, USER_A, MERCHANT_ID)
+    assert suggestion.source == "user_history"
+    assert suggestion.confidence == 100
+    assert suggestion.category_id == business.id
+
+
+def test_suggest_category_returns_none_for_unseeded_merchant_with_no_history() -> None:
+    merchant = _make_merchant(name="Some Random Merchant")
+    session = FakeSession(merchants=[merchant])
+    assert suggest_category(session, USER_A, MERCHANT_ID) is None

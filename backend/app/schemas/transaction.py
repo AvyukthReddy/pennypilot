@@ -24,7 +24,7 @@ class TransactionRead(BaseModel):
 class CategorySuggestionRead(BaseModel):
     category_id: uuid.UUID
     confidence: int
-    source: Literal["user_history", "global_consensus"]
+    source: Literal["user_history", "global_consensus", "seeded_default"]
 
     model_config = {"from_attributes": True}
 

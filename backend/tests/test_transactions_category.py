@@ -298,3 +298,22 @@ def test_patch_category_reassignment_updates_not_duplicates_preference(make_toke
     prefs = list(session.stores[MerchantCategoryPreference].values())
     assert len(prefs) == 1
     assert prefs[0].category_id == other.id
+
+
+def test_get_category_suggestion_returns_seeded_default_for_new_merchant(make_token) -> None:
+    txn = _make_transaction(description="AMZN MKTP US*2X82")
+    session = FakeSession([txn])
+    _use_fake_db(session)
+
+    response = client.get(
+        f"/api/transactions/{txn.id}/category-suggestion", headers=_auth(make_token, USER_A)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "seeded_default"
+    assert body["confidence"] == 50
+
+    resolved_id = uuid.UUID(body["category_id"])
+    resolved = session.stores[Category][resolved_id]
+    assert resolved.user_id == uuid.UUID(USER_A)
+    assert resolved.name == "Shopping"
